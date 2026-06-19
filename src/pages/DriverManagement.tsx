@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Table,
   Button,
@@ -18,6 +18,13 @@ import {
   Col,
   Card,
   message,
+  Progress,
+  Divider,
+  Timeline,
+  Descriptions,
+  Badge,
+  Statistic,
+  Empty,
 } from 'antd';
 import {
   PlusOutlined,
@@ -31,9 +38,15 @@ import {
   ShopOutlined,
   EditOutlined,
   EyeOutlined,
+  RiseOutlined,
+  HistoryOutlined,
+  TrophyOutlined,
+  LikeOutlined,
+  FieldTimeOutlined,
 } from '@ant-design/icons';
 import { useApp } from '../context/AppContext';
 import type { Driver, DriverTag } from '../types';
+import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -52,12 +65,14 @@ const tagColorMap: Record<DriverTag, string> = {
 };
 
 const DriverManagement: React.FC = () => {
-  const { drivers, fleets, stores, getEvaluationsByDriver, addDriver, updateDriver } = useApp();
+  const { drivers, fleets, stores, orders, getEvaluationsByDriver, addDriver, updateDriver } = useApp();
   const [searchText, setSearchText] = useState('');
   const [filterTag, setFilterTag] = useState<DriverTag | undefined>();
   const [filterStatus, setFilterStatus] = useState<string>();
   const [modalVisible, setModalVisible] = useState(false);
+  const [detailVisible, setDetailVisible] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
+  const [detailDriver, setDetailDriver] = useState<Driver | null>(null);
   const [form] = Form.useForm();
 
   const filteredDrivers = drivers.filter(d => {
@@ -85,6 +100,11 @@ const DriverManagement: React.FC = () => {
       ...driver,
     });
     setModalVisible(true);
+  };
+
+  const handleViewDetail = (driver: Driver) => {
+    setDetailDriver(driver);
+    setDetailVisible(true);
   };
 
   const handleSubmit = async () => {
@@ -134,20 +154,26 @@ const DriverManagement: React.FC = () => {
       <List
         size="small"
         dataSource={evals}
-        style={{ width: 320 }}
+        style={{ width: 380 }}
         renderItem={item => (
-          <List.Item style={{ padding: '8px 0' }}>
+          <List.Item style={{ padding: '10px 0' }}>
             <List.Item.Meta
               avatar={<StarOutlined style={{ color: '#faad14' }} />}
               title={
-                <Space>
-                  <Text strong>{item.createdAt}</Text>
-                  <Rate disabled allowHalf value={(item.punctuality + item.service + item.route) / 3} style={{ fontSize: 12 }} />
+                <Space orientation="vertical" size={2}>
+                  <Space>
+                    {item.orderNo && <Tag color="blue" style={{ margin: 0 }}>#{item.orderNo}</Tag>}
+                    <Text strong type="secondary" style={{ fontSize: 12 }}>{item.createdAt}</Text>
+                  </Space>
                 </Space>
               }
               description={
-                <Space orientation="vertical" size={4}>
-                  <Text type="secondary">{item.feedback}</Text>
+                <Space orientation="vertical" size={6}>
+                  <Space>
+                    <Rate disabled allowHalf value={(item.punctuality + item.service + item.route) / 3} style={{ fontSize: 12 }} />
+                    <Text type="secondary" style={{ fontSize: 11 }}>准时 {item.punctuality} · 服务 {item.service} · 路线 {item.route}</Text>
+                  </Space>
+                  <Text style={{ fontSize: 13 }}>💬 {item.feedback}</Text>
                   <Space wrap>
                     {item.tags.map(t => (
                       <Tag key={t} color={tagColorMap[t]} style={{ margin: 0 }}>{t}</Tag>
@@ -292,8 +318,10 @@ const DriverManagement: React.FC = () => {
       fixed: 'right' as const,
       render: (_: unknown, record: Driver) => (
         <Space>
-          <Tooltip title="查看评价">
-            <Button type="text" size="small" icon={<EyeOutlined />} />
+          <Tooltip title="查看司机档案">
+            <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => handleViewDetail(record)}>
+              详情
+            </Button>
           </Tooltip>
           <Button type="text" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
             编辑
@@ -302,6 +330,36 @@ const DriverManagement: React.FC = () => {
       ),
     },
   ];
+
+  const detailData = useMemo(() => {
+    if (!detailDriver) return null;
+    const evals = getEvaluationsByDriver(detailDriver.id);
+    const driverOrders = orders.filter(o => o.driverId === detailDriver.id).sort((a, b) => 
+      dayjs(b.departureTime).valueOf() - dayjs(a.departureTime).valueOf()
+    );
+    
+    const tagStats: Record<string, number> = {};
+    evals.forEach(e => e.tags.forEach(t => {
+      tagStats[t] = (tagStats[t] || 0) + 1;
+    }));
+    detailDriver.tags.forEach(t => {
+      if (!tagStats[t]) tagStats[t] = 1;
+    });
+    
+    const sortedTagStats = Object.entries(tagStats).sort((a, b) => b[1] - a[1]);
+    
+    const ratingTrend = evals.slice(0, 10).reverse().map(e => ({
+      date: dayjs(e.createdAt).format('MM-DD'),
+      score: Math.round(((e.punctuality + e.service + e.route) / 3) * 100) / 100,
+      orderNo: e.orderNo,
+    }));
+    
+    const avgScore = evals.length > 0 
+      ? evals.reduce((s, e) => s + (e.punctuality + e.service + e.route) / 3, 0) / evals.length
+      : 0;
+    
+    return { evals, driverOrders, sortedTagStats, ratingTrend, avgScore };
+  }, [detailDriver, orders, getEvaluationsByDriver]);
 
   return (
     <div>
@@ -448,6 +506,202 @@ const DriverManagement: React.FC = () => {
           </Row>
         </Form>
       </Modal>
+
+      {detailDriver && detailData && (
+        <Modal
+          title={
+            <Space>
+              <Avatar size="large" icon={<UserOutlined />} style={{ backgroundColor: '#1677ff' }}>
+                {detailDriver.name.charAt(0)}
+              </Avatar>
+              <Space orientation="vertical" size={0}>
+                <Text strong style={{ fontSize: 16 }}>{detailDriver.name}</Text>
+                <Space>
+                  <Tag color={detailDriver.status === '在岗' ? 'green' : detailDriver.status === '出车中' ? 'blue' : 'default'}>
+                    {detailDriver.status}
+                  </Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    <PhoneOutlined /> {detailDriver.phone}
+                  </Text>
+                </Space>
+              </Space>
+            </Space>
+          }
+          open={detailVisible}
+          onCancel={() => setDetailVisible(false)}
+          footer={
+            <Space>
+              <Button onClick={() => { handleEdit(detailDriver); setDetailVisible(false); }}>
+                编辑资料
+              </Button>
+              <Button type="primary" onClick={() => setDetailVisible(false)}>
+                关闭
+              </Button>
+            </Space>
+          }
+          width={880}
+          maskClosable={false}
+        >
+          <Row gutter={16}>
+            <Col span={8}>
+              <Card size="small" style={{ textAlign: 'center' }}>
+                <Statistic
+                  title="综合评分"
+                  value={detailDriver.rating.toFixed(2)}
+                  prefix={<TrophyOutlined style={{ color: '#faad14' }} />}
+                  styles={{ content: { color: '#faad14', fontSize: 28 } }}
+                />
+                <Rate disabled allowHalf value={detailDriver.rating} style={{ fontSize: 14 }} />
+                <div style={{ marginTop: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    累计接单 {detailDriver.totalOrders} 单 · 评价 {detailData.evals.length} 条
+                  </Text>
+                </div>
+              </Card>
+              
+              <Card 
+                size="small" 
+                style={{ marginTop: 12 }} 
+                title={<span><CarOutlined /> 车辆信息</span>}
+              >
+                <Descriptions column={1} size="small">
+                  <Descriptions.Item label="车型">{detailDriver.carType}</Descriptions.Item>
+                  <Descriptions.Item label="座位"><Tag color="blue">{detailDriver.carCapacity}座</Tag></Descriptions.Item>
+                  <Descriptions.Item label="车牌">{detailDriver.plateNumber}</Descriptions.Item>
+                  <Descriptions.Item label="车队">
+                    {detailDriver.fleetName ? <Tag color="geekblue">{detailDriver.fleetName}</Tag> : '个体'}
+                  </Descriptions.Item>
+                </Descriptions>
+              </Card>
+
+              <Card 
+                size="small" 
+                style={{ marginTop: 12 }} 
+                title={<span><RiseOutlined /> 最近评分走势</span>}
+              >
+                {detailData.ratingTrend.length === 0 ? (
+                  <Text type="secondary" style={{ fontSize: 12 }}>暂无历史评分</Text>
+                ) : (
+                  <Space orientation="vertical" size={6} style={{ width: '100%' }}>
+                    {detailData.ratingTrend.map((t, i) => (
+                      <div key={i}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                          <Space>
+                            <Text type="secondary" style={{ fontSize: 11 }}>{t.date}</Text>
+                            {t.orderNo && <Tag color="blue" style={{ fontSize: 10, margin: 0, padding: '0 4px', lineHeight: '16px', height: 16 }}>#{t.orderNo}</Tag>}
+                          </Space>
+                          <Text strong style={{ fontSize: 11, color: t.score >= 4.5 ? '#52c41a' : t.score >= 3.5 ? '#faad14' : '#ff4d4f' }}>
+                            {t.score}
+                          </Text>
+                        </div>
+                        <Progress 
+                          percent={(t.score / 5) * 100} 
+                          showInfo={false} 
+                          size="small"
+                          strokeColor={t.score >= 4.5 ? '#52c41a' : t.score >= 3.5 ? '#faad14' : '#ff4d4f'}
+                        />
+                      </div>
+                    ))}
+                  </Space>
+                )}
+              </Card>
+            </Col>
+
+            <Col span={16}>
+              <Card size="small" title={<span><LikeOutlined /> 服务标签沉淀</span>}>
+                <Space wrap>
+                  {detailData.sortedTagStats.length === 0 ? (
+                    <Text type="secondary">暂无服务标签</Text>
+                  ) : detailData.sortedTagStats.map(([tag, count]) => (
+                    <Badge key={tag} count={count} size="small" offset={[4, -2]}>
+                      <Tag color={tagColorMap[tag as DriverTag] || 'default'} style={{ fontSize: 13, margin: 4, padding: '4px 10px' }}>
+                        {tag}
+                      </Tag>
+                    </Badge>
+                  ))}
+                </Space>
+                <Divider style={{ margin: '12px 0' }} />
+                <Space wrap size={[8, 8]}>
+                  <Tag icon={<EnvironmentOutlined />} color="cyan">
+                    服务区域：{detailDriver.serviceAreas.join('、')}
+                  </Tag>
+                  <Tag icon={<MoonOutlined />} color={detailDriver.nightService ? 'magenta' : 'default'}>
+                    夜间：{detailDriver.nightService ? '可接单' : '仅白天'}
+                  </Tag>
+                  {detailDriver.usualStores.map(sid => {
+                    const store = stores.find(s => s.id === sid);
+                    return store ? (
+                      <Tag key={sid} icon={<ShopOutlined />} color="purple">
+                        常跑：{store.name.replace('迷雾剧社·', '')}
+                      </Tag>
+                    ) : null;
+                  })}
+                </Space>
+              </Card>
+
+              <Card 
+                size="small" 
+                style={{ marginTop: 12 }} 
+                title={<span><HistoryOutlined /> 服务历史与评价时间线</span>}
+                bodyStyle={{ maxHeight: 420, overflowY: 'auto' }}
+              >
+                {detailData.evals.length === 0 && detailData.driverOrders.length === 0 ? (
+                  <Empty description="暂无服务记录" />
+                ) : (
+                  <Timeline
+                    mode="left"
+                    items={[
+                      ...detailData.evals.map(e => ({
+                        color: 'green',
+                        dot: <StarOutlined style={{ color: '#faad14' }} />,
+                        label: <Text type="secondary" style={{ fontSize: 12 }}>{dayjs(e.createdAt).format('YYYY-MM-DD HH:mm')}</Text>,
+                        children: (
+                          <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                            <Space>
+                              <Tag color="blue" style={{ margin: 0 }}>订单 #{e.orderNo}</Tag>
+                              <Badge count={Math.round(((e.punctuality + e.service + e.route) / 3) * 10) / 10} showZero color="#faad14" />
+                              <Text type="secondary" style={{ fontSize: 11 }}>
+                                准时 {e.punctuality} · 服务 {e.service} · 路线 {e.route}
+                              </Text>
+                            </Space>
+                            <Text>💬 {e.feedback}</Text>
+                            {e.tags.length > 0 && (
+                              <Space wrap>
+                                {e.tags.map(t => (
+                                  <Tag key={t} color={tagColorMap[t]} style={{ margin: 0 }}>{t}</Tag>
+                                ))}
+                              </Space>
+                            )}
+                          </Space>
+                        ),
+                      })),
+                      ...detailData.driverOrders
+                        .filter(o => !detailData.evals.some(e => e.orderId === o.id))
+                        .map(o => ({
+                          color: 'blue',
+                          dot: <FieldTimeOutlined style={{ color: '#1677ff' }} />,
+                          label: <Text type="secondary" style={{ fontSize: 12 }}>{dayjs(o.departureTime).format('YYYY-MM-DD HH:mm')}</Text>,
+                          children: (
+                            <Space orientation="vertical" size={2}>
+                              <Space>
+                                <Tag color="blue" style={{ margin: 0 }}>订单 #{o.orderNo}</Tag>
+                                <Tag color={o.status === '已完成' ? 'green' : o.status === '服务中' ? 'processing' : 'blue'}>{o.status}</Tag>
+                              </Space>
+                              <Text type="secondary">{o.storeName} · {o.peopleCount}人 · 预算 ¥{o.budget}</Text>
+                              {o.actualArrivalTime && <Text type="secondary">实际到店：{o.actualArrivalTime}</Text>}
+                              {o.playerFeedback && <Text>💬 {o.playerFeedback}</Text>}
+                              <Text type="secondary" style={{ fontSize: 11 }}>（待补录评价）</Text>
+                            </Space>
+                          ),
+                        })),
+                    ]}
+                  />
+                )}
+              </Card>
+            </Col>
+          </Row>
+        </Modal>
+      )}
     </div>
   );
 };

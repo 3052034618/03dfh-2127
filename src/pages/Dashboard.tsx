@@ -1,5 +1,5 @@
 import React from 'react';
-import { Row, Col, Card, Statistic, Table, Tag, Progress, Space, Typography, Badge, Alert, Steps } from 'antd';
+import { Row, Col, Card, Statistic, Table, Tag, Progress, Space, Typography, Badge, Alert, Steps, Button, List } from 'antd';
 import {
   CarOutlined,
   ClockCircleOutlined,
@@ -7,14 +7,20 @@ import {
   CheckCircleOutlined,
   TeamOutlined,
   ExclamationCircleOutlined,
+  RightOutlined,
+  AlertOutlined,
+  StopOutlined,
+  ShopOutlined,
 } from '@ant-design/icons';
 import { useApp, SERVICE_STEPS } from '../context/AppContext';
+import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 
 const Dashboard: React.FC = () => {
   const { orders, drivers, stores } = useApp();
+  const navigate = useNavigate();
 
   const pendingOrders = orders.filter(o => o.status === '待确认');
   const dispatchedOrders = orders.filter(o => o.status === '已派单');
@@ -23,6 +29,33 @@ const Dashboard: React.FC = () => {
 
   const lowBudgetThreshold = 150;
   const lowBudgetOrders = pendingOrders.filter(o => o.budget < lowBudgetThreshold);
+
+  const abnormalOrders = orders
+    .map(o => {
+      let type: '' | '已派单未出发' | '司机未到店' | '服务中未完成' = '';
+      let hoursStuck = 0;
+      const step = o.currentStep;
+      const refTime = step ? o.stepTimestamps?.[step] : undefined;
+      const baseTime = refTime || o.departureTime;
+      hoursStuck = Math.max(0, dayjs().diff(dayjs(baseTime), 'hour'));
+      
+      if (o.status === '已派单') {
+        if (!step || step === '已派单') {
+          if (hoursStuck >= 1) type = '已派单未出发';
+        } else if (step === '司机已出发') {
+          if (hoursStuck >= 2) type = '司机未到店';
+        }
+      } else if (o.status === '服务中') {
+        if (step === '司机已出发' || !step) {
+          if (hoursStuck >= 2) type = '司机未到店';
+        } else if (step === '已到店' || step === '已接到玩家') {
+          if (hoursStuck >= 4) type = '服务中未完成';
+        }
+      }
+      return { order: o, type, hoursStuck };
+    })
+    .filter(x => x.type !== '')
+    .sort((a, b) => b.hoursStuck - a.hoursStuck);
 
   const storeOrderStatus = stores.map(store => {
     const storeOrders = orders.filter(o => o.storeId === store.id && 
@@ -272,6 +305,103 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      <Card 
+        style={{ marginTop: 16 }}
+        title={
+          <Space>
+            <Badge count={abnormalOrders.length} color="#ff4d4f" />
+            <AlertOutlined style={{ color: '#ff4d4f' }} />
+            <span>异常跟进区</span>
+          </Space>
+        }
+        size="small"
+        extra={
+          abnormalOrders.length > 0 && (
+            <Button 
+              size="small" 
+              type="primary" 
+              onClick={() => navigate('/orders')}
+              icon={<RightOutlined />}
+            >
+              去订单中心处理
+            </Button>
+          )
+        }
+      >
+        {abnormalOrders.length === 0 ? (
+          <Alert
+            type="success"
+            showIcon
+            title="当前没有异常订单"
+            description="所有派单都在正常推进中"
+          />
+        ) : (
+          <List
+            size="small"
+            dataSource={abnormalOrders.slice(0, 8)}
+            renderItem={({ order, type, hoursStuck }) => (
+              <List.Item
+                style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}
+                actions={[
+                  <Button
+                    key="go"
+                    type="link"
+                    size="small"
+                    icon={<RightOutlined />}
+                    onClick={() => navigate('/orders')}
+                  >
+                    推进节点
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={
+                    <Badge status="error" />
+                  }
+                  title={
+                    <Space>
+                      <Text strong>#{order.orderNo}</Text>
+                      <Tag 
+                        color={
+                          type === '已派单未出发' ? 'orange' : 
+                          type === '司机未到店' ? 'red' : 'volcano'
+                        } 
+                        icon={<StopOutlined />}
+                        style={{ margin: 0 }}
+                      >
+                        {type}
+                      </Tag>
+                      <Text type="danger" style={{ fontSize: 12 }}>
+                        已停滞约 {hoursStuck} 小时
+                      </Text>
+                    </Space>
+                  }
+                  description={
+                    <Space orientation="vertical" size={2}>
+                      <Space size={16}>
+                        <Text type="secondary">
+                          <ShopOutlined /> {order.storeName}
+                        </Text>
+                        <Text type="secondary">
+                          👤 {order.driverName || '未指派'}
+                        </Text>
+                        <Text type="secondary">
+                          ⏰ {dayjs(order.departureTime).format('MM-DD HH:mm')}
+                        </Text>
+                      </Space>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        当前节点：{order.currentStep || order.status}
+                        {order.driverName && ` · 司机：${order.driverName}`}
+                      </Text>
+                    </Space>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Card>
 
       <Card 
         style={{ marginTop: 16 }}

@@ -172,7 +172,7 @@ const OrderCenter: React.FC = () => {
       });
 
       const newTags = values.tags || [];
-      const evaluation = {
+      const newEval = {
         id: `e${Date.now()}`,
         driverId: currentOrder.driverId,
         driverName: currentOrder.driverName,
@@ -185,13 +185,14 @@ const OrderCenter: React.FC = () => {
         tags: newTags,
         createdAt: dayjs().format('YYYY-MM-DD HH:mm'),
       };
-      addEvaluation(evaluation);
+      addEvaluation(newEval);
 
       const driver = drivers.find(d => d.id === currentOrder.driverId);
       if (driver) {
-        const evals = getEvaluationsByDriver(currentOrder.driverId);
-        const avgRating = evals.length > 0 
-          ? evals.reduce((sum, e) => sum + (e.punctuality + e.service + e.route) / 3, 0) / evals.length
+        const existingEvals = getEvaluationsByDriver(currentOrder.driverId);
+        const allEvals = [newEval, ...existingEvals];
+        const avgRating = allEvals.length > 0 
+          ? allEvals.reduce((sum, e) => sum + (e.punctuality + e.service + e.route) / 3, 0) / allEvals.length
           : 5;
         const mergedTags = [...new Set([...driver.tags, ...newTags])] as DriverTag[];
         updateDriver(currentOrder.driverId, {
@@ -216,21 +217,29 @@ const OrderCenter: React.FC = () => {
     return (
       <List
         size="small"
-        style={{ width: 320 }}
+        style={{ width: 360 }}
         dataSource={evals}
         renderItem={item => (
-          <List.Item style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+          <List.Item style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
             <List.Item.Meta
               avatar={<StarOutlined style={{ color: '#faad14', fontSize: 18 }} />}
               title={
-                <Space>
-                  <Text strong>{item.createdAt}</Text>
-                  <Rate disabled allowHalf value={(item.punctuality + item.service + item.route) / 3} style={{ fontSize: 12 }} />
+                <Space orientation="vertical" size={2} style={{ width: '100%' }}>
+                  <Space>
+                    {item.orderNo && <Tag color="blue" style={{ margin: 0 }}>#{item.orderNo}</Tag>}
+                    <Text type="secondary" style={{ fontSize: 12 }}>{item.createdAt}</Text>
+                    <Rate disabled allowHalf value={(item.punctuality + item.service + item.route) / 3} style={{ fontSize: 12 }} />
+                  </Space>
                 </Space>
               }
               description={
-                <Space orientation="vertical" size={4}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>{item.feedback}</Text>
+                <Space orientation="vertical" size={6} style={{ width: '100%' }}>
+                  <Space>
+                    <Text type="secondary" style={{ fontSize: 11 }}>准时 {item.punctuality}</Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>服务 {item.service}</Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>路线 {item.route}</Text>
+                  </Space>
+                  <Text style={{ fontSize: 13 }}>💬 {item.feedback}</Text>
                   <Space wrap size={4}>
                     {item.tags.map(t => (
                       <Tag key={t} color={tagColorMap[t]} style={{ margin: 0, fontSize: 11 }}>{t}</Tag>
@@ -319,6 +328,57 @@ const OrderCenter: React.FC = () => {
       }
     }
     return reasons.length > 0 ? reasons : ['当前条件下可用司机较少，建议联系车队调度'];
+  };
+
+  type RiskLevel = 'none' | 'warning' | 'danger';
+  interface DriverRisk {
+    level: RiskLevel;
+    reasons: string[];
+  }
+  const getDriverRisks = (driver: Driver): DriverRisk => {
+    if (!currentOrder) return { level: 'none', reasons: [] };
+    const reasons: string[] = [];
+
+    if (driver.carCapacity < currentOrder.peopleCount) {
+      reasons.push(`⚠️ 座位不够：司机车仅${driver.carCapacity}座，需要${currentOrder.peopleCount}座`);
+    }
+
+    const isNight = isNightTime(currentOrder.endTime);
+    if (isNight && !driver.nightService) {
+      reasons.push('🌙 夜间能力不匹配：该司机不接夜单');
+    }
+
+    if (isNight && driver.status === '休息') {
+      reasons.push('🛌 司机状态：当前已标记休息');
+    }
+
+    if (currentOrder.budget < 150 && !driver.tags.includes('价格公道')) {
+      reasons.push(`💰 预算偏低：¥${currentOrder.budget}可能低于该司机预期`);
+    }
+
+    const departureMoment = dayjs(currentOrder.departureTime);
+    const conflictOrder = orders.find(o => 
+      o.id !== currentOrder.id &&
+      o.driverId === driver.id &&
+      o.status !== '已完成' &&
+      o.status !== '待确认' &&
+      dayjs(o.departureTime).isSame(departureMoment, 'day') &&
+      Math.abs(dayjs(o.departureTime).diff(departureMoment, 'hour')) < 4
+    );
+    if (conflictOrder) {
+      reasons.push(`⏰ 时间冲突：与订单 #${conflictOrder.orderNo} 时段重叠`);
+    }
+
+    if (driver.status === '出车中') {
+      reasons.push('🚗 司机当前出车中，需确认是否能及时赶到');
+    }
+
+    if (reasons.length === 0) return { level: 'none', reasons: [] };
+    const hasDanger = reasons.some(r => r.includes('座位不够') || r.includes('时间冲突') || r.includes('不接夜单'));
+    return {
+      level: hasDanger ? 'danger' : 'warning',
+      reasons,
+    };
   };
 
   const columns = [
@@ -780,6 +840,32 @@ const OrderCenter: React.FC = () => {
                                 </Space>
                               </div>
                             )}
+                            {(() => {
+                              const risk = getDriverRisks(driver);
+                              if (risk.level === 'none') return null;
+                              const bgColor = risk.level === 'danger' ? '#fff2f0' : '#fffbe6';
+                              const borderColor = risk.level === 'danger' ? '#ffccc7' : '#ffe58f';
+                              const titleColor = risk.level === 'danger' ? '#cf1322' : '#d48806';
+                              const tagColor = risk.level === 'danger' ? 'error' : 'warning';
+                              const tagIcon = risk.level === 'danger' ? '🚫 不建议派单' : '⚠️ 派单风险';
+                              return (
+                                <div style={{ 
+                                  background: bgColor, 
+                                  padding: '8px 12px', 
+                                  borderRadius: 6,
+                                  border: `1px solid ${borderColor}`,
+                                }}>
+                                  <Text strong style={{ color: titleColor, fontSize: 12 }}>{tagIcon}</Text>
+                                  <Space orientation="vertical" size={4} style={{ marginTop: 4, width: '100%' }}>
+                                    {risk.reasons.map((r, idx) => (
+                                      <Tag key={idx} color={tagColor} style={{ margin: 0, fontSize: 12, width: '100%' }}>
+                                        {r}
+                                      </Tag>
+                                    ))}
+                                  </Space>
+                                </div>
+                              );
+                            })()}
                             <Space size={16} style={{ width: '100%' }}>
                               <div style={{ flex: 1 }}>
                                 <Text type="secondary" style={{ fontSize: 12 }}>匹配度</Text>
