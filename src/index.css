@@ -36,3 +36,13 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
 }
+
+.order-highlight > td {
+  background-color: #fff7e6 !important;
+  animation: orderPulse 2s ease-in-out 3;
+}
+
+@keyframes orderPulse {
+  0%, 100% { background-color: #fff7e6; }
+  50% { background-color: #ffd666; }
+}

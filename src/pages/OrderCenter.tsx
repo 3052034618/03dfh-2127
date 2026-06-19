@@ -23,6 +23,8 @@ import {
   Col,
   Badge,
   Steps,
+  Collapse,
+  Alert,
 } from 'antd';
 import {
   PlusOutlined,
@@ -41,8 +43,10 @@ import {
   EditOutlined,
   EyeOutlined,
   CheckOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import { useApp, SERVICE_STEPS } from '../context/AppContext';
+import { useSearchParams } from 'react-router-dom';
 import type { CarOrder, Driver, DriverTag } from '../types';
 import dayjs from 'dayjs';
 
@@ -66,22 +70,225 @@ const tagColorMap: Record<DriverTag, string> = {
 
 const OrderCenter: React.FC = () => {
   const { orders, stores, drivers, fleets, getDriversByFilter, addOrder, updateOrder, getEvaluationsByDriver, addEvaluation, updateDriver, assignDriverToOrder, advanceOrderStep } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>();
   const [publishVisible, setPublishVisible] = useState(false);
   const [recommendVisible, setRecommendVisible] = useState(false);
+  const [scheduleVisible, setScheduleVisible] = useState(false);
+  const [scheduleDriver, setScheduleDriver] = useState<Driver | null>(null);
   const [currentOrder, setCurrentOrder] = useState<CarOrder | null>(null);
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [publishForm] = Form.useForm();
   const [feedbackForm] = Form.useForm();
 
-  const filteredOrders = orders.filter(o => {
-    if (searchText && !o.orderNo.includes(searchText) && !o.storeName.includes(searchText)) {
-      return false;
+  const urlFilter = searchParams.get('filter');
+  const urlType = searchParams.get('type');
+  const urlOrderNo = searchParams.get('orderNo');
+
+  const isAbnormalOrder = (o: CarOrder): { abnormal: boolean; type: string; hours: number } => {
+    let abnormal = false;
+    let type = '';
+    let hours = 0;
+    const step = o.currentStep;
+    const refTime = step ? o.stepTimestamps?.[step] : undefined;
+    const baseTime = refTime || o.departureTime;
+    hours = Math.max(0, dayjs().diff(dayjs(baseTime), 'hour'));
+    
+    if (o.status === '已派单') {
+      if (!step || step === '已派单') {
+        if (hours >= 1) { abnormal = true; type = '已派单未出发'; }
+      } else if (step === '司机已出发') {
+        if (hours >= 2) { abnormal = true; type = '司机未到店'; }
+      }
+    } else if (o.status === '服务中') {
+      if (step === '司机已出发' || !step) {
+        if (hours >= 2) { abnormal = true; type = '司机未到店'; }
+      } else if (step === '已到店' || step === '已接到玩家') {
+        if (hours >= 4) { abnormal = true; type = '服务中未完成'; }
+      }
     }
-    if (filterStatus && o.status !== filterStatus) return false;
-    return true;
-  });
+    return { abnormal, type, hours };
+  };
+
+  const filteredOrders = useMemo(() => {
+    return orders.filter(o => {
+      if (searchText && !o.orderNo.includes(searchText) && !o.storeName.includes(searchText)) {
+        return false;
+      }
+      if (filterStatus && o.status !== filterStatus) return false;
+      if (urlFilter === 'abnormal') {
+        const { abnormal, type } = isAbnormalOrder(o);
+        if (!abnormal) return false;
+        if (urlType && type !== urlType) return false;
+      }
+      if (urlOrderNo && !o.orderNo.includes(urlOrderNo)) return false;
+      return true;
+    });
+  }, [orders, searchText, filterStatus, urlFilter, urlType, urlOrderNo]);
+
+  const clearUrlFilter = () => {
+    setSearchParams({});
+  };
+
+  const getDriverSchedule = (driver: Driver, targetDate?: dayjs.Dayjs) => {
+    const date = targetDate || (currentOrder ? dayjs(currentOrder.departureTime) : dayjs());
+    const driverOrders = orders.filter(o => 
+      o.driverId === driver.id &&
+      dayjs(o.departureTime).isSame(date, 'day') &&
+      o.status !== '待确认'
+    );
+
+    const events = driverOrders.map(o => ({
+      orderId: o.id,
+      orderNo: o.orderNo,
+      start: dayjs(o.departureTime),
+      end: dayjs(o.endTime),
+      status: o.status,
+      currentStep: o.currentStep,
+      storeName: o.storeName,
+      peopleCount: o.peopleCount,
+    })).sort((a, b) => a.start.valueOf() - b.start.valueOf());
+
+    const startHour = 8;
+    const endHour = 24;
+    const totalHours = endHour - startHour;
+
+    const blocks: Array<{
+      type: 'idle' | 'dispatched' | 'inservice' | 'completed';
+      start: number;
+      end: number;
+      orderNo?: string;
+      storeName?: string;
+    }> = [];
+
+    let lastEnd = startHour;
+    events.forEach(ev => {
+      const evStart = ev.start.hour() + ev.start.minute() / 60;
+      const evEnd = ev.end.hour() + ev.end.minute() / 60;
+      
+      if (evStart > lastEnd) {
+        blocks.push({ type: 'idle', start: lastEnd, end: evStart });
+      }
+      
+      const type = ev.status === '已完成' ? 'completed' :
+                   ev.status === '服务中' ? 'inservice' : 'dispatched';
+      blocks.push({
+        type,
+        start: Math.max(startHour, evStart),
+        end: Math.min(endHour, evEnd),
+        orderNo: ev.orderNo,
+        storeName: ev.storeName,
+      });
+      lastEnd = Math.max(lastEnd, evEnd);
+    });
+    
+    if (lastEnd < endHour) {
+      blocks.push({ type: 'idle', start: lastEnd, end: endHour });
+    }
+
+    return { date, events, blocks, totalHours, startHour, endHour };
+  };
+
+  const renderScheduleBar = (driver: Driver) => {
+    const sched = getDriverSchedule(driver);
+    if (!currentOrder) return null;
+
+    const targetStart = dayjs(currentOrder.departureTime).hour() + dayjs(currentOrder.departureTime).minute() / 60;
+    const targetEnd = dayjs(currentOrder.endTime).hour() + dayjs(currentOrder.endTime).minute() / 60;
+    const hasConflict = sched.events.some(ev => 
+      dayjs(currentOrder.departureTime).isBefore(ev.end) &&
+      dayjs(currentOrder.endTime).isAfter(ev.start)
+    );
+
+    const idleBlocks = sched.blocks.filter(b => b.type === 'idle');
+    const canFit = idleBlocks.some(b => 
+      b.start <= targetStart && b.end >= targetEnd
+    );
+
+    return (
+      <div style={{ marginTop: 8 }}>
+        <Space size={4} style={{ marginBottom: 4 }}>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            当日日程：
+          </Text>
+          {hasConflict ? (
+            <Tag color="error" style={{ margin: 0, fontSize: 11 }}>⏰ 时间冲突</Tag>
+          ) : canFit ? (
+            <Tag color="success" style={{ margin: 0, fontSize: 11 }}>✅ 时段空闲</Tag>
+          ) : (
+            <Tag color="warning" style={{ margin: 0, fontSize: 11 }}>⚠️ 时段紧张</Tag>
+          )}
+        </Space>
+        <div 
+          style={{ 
+            position: 'relative', 
+            height: 28, 
+            background: '#f5f5f5', 
+            borderRadius: 4, 
+            overflow: 'hidden',
+            border: '1px solid #e8e8e8',
+          }}
+        >
+          {sched.blocks.map((block, idx) => {
+            const left = ((block.start - sched.startHour) / sched.totalHours) * 100;
+            const width = ((block.end - block.start) / sched.totalHours) * 100;
+            const bgColor = block.type === 'idle' ? '#52c41a' :
+                          block.type === 'inservice' ? '#13c2c2' :
+                          block.type === 'completed' ? '#8c8c8c' : '#1677ff';
+            return (
+              <Tooltip 
+                key={idx}
+                title={
+                  block.type === 'idle' 
+                    ? `空闲：${Math.floor(block.start)}:${String(Math.round((block.start%1)*60)).padStart(2,'0')} - ${Math.floor(block.end)}:${String(Math.round((block.end%1)*60)).padStart(2,'0')}`
+                    : `订单 #${block.orderNo} · ${block.storeName}`
+                }
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${left}%`,
+                    width: `${width}%`,
+                    top: 0,
+                    height: '100%',
+                    background: bgColor,
+                    cursor: 'pointer',
+                  }}
+                />
+              </Tooltip>
+            );
+          })}
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: `${((targetStart - sched.startHour) / sched.totalHours) * 100}%`,
+              width: `${((targetEnd - targetStart) / sched.totalHours) * 100}%`,
+              border: '2px dashed #faad14',
+              borderRadius: 4,
+              boxSizing: 'border-box',
+              pointerEvents: 'none',
+              background: hasConflict ? 'rgba(255,77,79,0.1)' : 'rgba(82,196,26,0.1)',
+            }}
+          />
+          <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', padding: '0 4px' }}>
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Text key={i} style={{ fontSize: 9, color: '#999' }}>
+                {sched.startHour + i * 4}:00
+              </Text>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const handleViewSchedule = (driver: Driver) => {
+    setScheduleDriver(driver);
+    setScheduleVisible(true);
+  };
 
   const isNightTime = (timeStr: string) => {
     const hour = dayjs(timeStr).hour();
@@ -93,6 +300,46 @@ const OrderCenter: React.FC = () => {
     const isNight = isNightTime(currentOrder.endTime);
     return getDriversByFilter(currentOrder.storeId, isNight, currentOrder.peopleCount, currentOrder.priorityTags);
   }, [currentOrder, getDriversByFilter]);
+
+  const filteredOutDrivers = useMemo(() => {
+    if (!currentOrder) return [];
+    const isNight = isNightTime(currentOrder.endTime);
+    const recIds = new Set(recommendedDrivers.map(d => d.id));
+    return drivers
+      .filter(d => !recIds.has(d.id))
+      .map(driver => {
+        const reasons: string[] = [];
+        if (driver.status === '休息') reasons.push('🛌 司机已标记休息');
+        const store = stores.find(s => s.id === currentOrder.storeId);
+        const inArea = driver.usualStores.includes(currentOrder.storeId) || 
+          (store && driver.serviceAreas.includes(store.district));
+        if (!inArea) reasons.push('📍 不在门店服务区域');
+        if (isNight && !driver.nightService) reasons.push('🌙 不接夜单');
+        if (driver.carCapacity < currentOrder.peopleCount) {
+          reasons.push(`⚠️ 座位不够：仅${driver.carCapacity}座，需要${currentOrder.peopleCount}座`);
+        }
+        if (currentOrder.priorityTags && currentOrder.priorityTags.length > 0) {
+          const hasMatch = currentOrder.priorityTags.some(t => driver.tags.includes(t));
+          if (!hasMatch) reasons.push(`🏷️ 缺少优先级标签：${currentOrder.priorityTags.join('、')}`);
+        }
+        const depStart = dayjs(currentOrder.departureTime);
+        const depEnd = dayjs(currentOrder.endTime);
+        const conflict = orders.find(o => 
+          o.id !== currentOrder.id &&
+          o.driverId === driver.id &&
+          o.status !== '已完成' &&
+          o.status !== '待确认' &&
+          dayjs(o.departureTime).isBefore(depEnd) &&
+          dayjs(o.endTime).isAfter(depStart)
+        );
+        if (conflict) {
+          reasons.push(`⏰ 时间冲突：与订单 #${conflict.orderNo} 重叠`);
+        }
+        return { driver, reasons };
+      })
+      .filter(x => x.reasons.length > 0)
+      .slice(0, 8);
+  }, [currentOrder, recommendedDrivers, drivers, stores, orders]);
 
   const handlePublish = () => {
     publishForm.resetFields();
@@ -356,17 +603,23 @@ const OrderCenter: React.FC = () => {
       reasons.push(`💰 预算偏低：¥${currentOrder.budget}可能低于该司机预期`);
     }
 
-    const departureMoment = dayjs(currentOrder.departureTime);
-    const conflictOrder = orders.find(o => 
-      o.id !== currentOrder.id &&
-      o.driverId === driver.id &&
-      o.status !== '已完成' &&
-      o.status !== '待确认' &&
-      dayjs(o.departureTime).isSame(departureMoment, 'day') &&
-      Math.abs(dayjs(o.departureTime).diff(departureMoment, 'hour')) < 4
-    );
+    const depStart = dayjs(currentOrder.departureTime);
+    const depEnd = dayjs(currentOrder.endTime);
+    const conflictOrder = orders.find(o => {
+      if (o.id === currentOrder.id) return false;
+      if (o.driverId !== driver.id) return false;
+      if (o.status === '已完成' || o.status === '待确认') return false;
+      const oStart = dayjs(o.departureTime);
+      const oEnd = dayjs(o.endTime);
+      return depStart.isBefore(oEnd) && depEnd.isAfter(oStart);
+    });
     if (conflictOrder) {
-      reasons.push(`⏰ 时间冲突：与订单 #${conflictOrder.orderNo} 时段重叠`);
+      const cStart = dayjs(conflictOrder.departureTime);
+      const cEnd = dayjs(conflictOrder.endTime);
+      const overlapStart = depStart.isAfter(cStart) ? depStart : cStart;
+      const overlapEnd = depEnd.isBefore(cEnd) ? depEnd : cEnd;
+      const overlapMins = Math.max(0, overlapEnd.diff(overlapStart, 'minute'));
+      reasons.push(`⏰ 时间冲突：与订单 #${conflictOrder.orderNo} 重叠约${overlapMins}分钟（${cStart.format('HH:mm')}-${cEnd.format('HH:mm')}）`);
     }
 
     if (driver.status === '出车中') {
@@ -571,7 +824,24 @@ const OrderCenter: React.FC = () => {
       <Text type="secondary">门店发布包场车源，智能匹配推荐司机，跟踪订单状态</Text>
 
       <Card style={{ marginTop: 16 }} size="small">
-        <Space wrap>
+        <Space wrap style={{ width: '100%' }}>
+          {urlFilter && (
+            <Alert
+              type="warning"
+              showIcon
+              message={
+                <Space>
+                  <Text strong>
+                    {urlFilter === 'abnormal' ? '异常订单筛选中' : urlFilter}
+                    {urlType && `：${urlType}`}
+                    {urlOrderNo && ` · 订单号 ${urlOrderNo}`}
+                  </Text>
+                  <Button size="small" onClick={clearUrlFilter}>清除筛选</Button>
+                </Space>
+              }
+              style={{ width: '100%', marginBottom: 8 }}
+            />
+          )}
           <Input
             prefix={<SearchOutlined />}
             placeholder="搜索订单号/门店"
@@ -606,6 +876,7 @@ const OrderCenter: React.FC = () => {
         rowKey="id"
         scroll={{ x: 1300 }}
         pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条订单` }}
+        rowClassName={(record) => record.orderNo === urlOrderNo ? 'order-highlight' : ''}
       />
 
       <Modal
@@ -866,6 +1137,9 @@ const OrderCenter: React.FC = () => {
                                 </div>
                               );
                             })()}
+                            
+                            {renderScheduleBar(driver)}
+                            
                             <Space size={16} style={{ width: '100%' }}>
                               <div style={{ flex: 1 }}>
                                 <Text type="secondary" style={{ fontSize: 12 }}>匹配度</Text>
@@ -888,6 +1162,9 @@ const OrderCenter: React.FC = () => {
                               <Popover content={renderDriverEvaluation(driver)} title="最近服务评价" trigger="click">
                                 <Button type="link" size="small" icon={<StarOutlined />}>查看历史评价</Button>
                               </Popover>
+                              <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={() => handleViewSchedule(driver)}>
+                                查看日程
+                              </Button>
                             </Space>
                           </Space>
                         }
@@ -897,9 +1174,286 @@ const OrderCenter: React.FC = () => {
                 }}
               />
             )}
+
+            {filteredOutDrivers.length > 0 && (
+              <Collapse
+                style={{ marginTop: 16 }}
+                size="small"
+                items={[{
+                  key: 'filtered',
+                  label: (
+                    <Space>
+                      <StopOutlined style={{ color: '#ff4d4f' }} />
+                      <span>查看被过滤的司机（{filteredOutDrivers.length}人）</span>
+                      <Tag color="default">人工协调参考</Tag>
+                    </Space>
+                  ),
+                  children: (
+                    <List
+                      size="small"
+                      dataSource={filteredOutDrivers}
+                      renderItem={({ driver, reasons }) => (
+                        <List.Item
+                          style={{
+                            padding: '12px',
+                            border: '1px dashed #ffccc7',
+                            borderRadius: 6,
+                            marginBottom: 8,
+                            background: '#fffbf0',
+                          }}
+                          actions={[
+                            <Tooltip title="强制派单需人工确认风险">
+                              <Button 
+                                size="small" 
+                                danger 
+                                ghost
+                                onClick={() => {
+                                  Modal.confirm({
+                                    title: '确认强制派单？',
+                                    content: `该司机存在以下风险：\n${reasons.join('\n')}\n\n建议先电话联系司机确认。`,
+                                    okText: '确认派单',
+                                    okType: 'danger',
+                                    cancelText: '取消',
+                                    onOk: () => handleAssignDriver(driver),
+                                  });
+                                }}
+                              >
+                                仍要派单
+                              </Button>
+                            </Tooltip>,
+                          ]}
+                        >
+                          <List.Item.Meta
+                            avatar={<Avatar size={36} icon={<UserOutlined />} style={{ backgroundColor: '#8c8c8c' }} />}
+                            title={
+                              <Space>
+                                <Text strong>{driver.name}</Text>
+                                <Text type="secondary">{driver.carType} · {driver.carCapacity}座</Text>
+                                <Tag color={driver.status === '在岗' ? 'green' : driver.status === '出车中' ? 'blue' : 'default'}>
+                                  {driver.status}
+                                </Tag>
+                                <Rate disabled allowHalf value={driver.rating} style={{ fontSize: 12 }} />
+                              </Space>
+                            }
+                            description={
+                              <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                                <Space wrap size={4}>
+                                  {reasons.map((r, idx) => (
+                                    <Tag key={idx} color="error" style={{ margin: 0 }}>{r}</Tag>
+                                  ))}
+                                </Space>
+                              </Space>
+                            }
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  ),
+                }]}
+              />
+            )}
           </div>
         )}
       </Modal>
+
+      {scheduleDriver && currentOrder && (
+        <Modal
+          title={
+            <Space>
+              <ClockCircleOutlined style={{ color: '#1677ff' }} />
+              <span>司机日程视图 - {scheduleDriver.name}</span>
+              <Tag color="blue">{dayjs(currentOrder.departureTime).format('YYYY-MM-DD')}</Tag>
+            </Space>
+          }
+          open={scheduleVisible}
+          onCancel={() => setScheduleVisible(false)}
+          width={720}
+          footer={
+            <Space>
+              <Button 
+                type="primary" 
+                icon={<CheckOutlined />}
+                onClick={() => handleAssignDriver(scheduleDriver)}
+              >
+                指派该司机
+              </Button>
+              <Button onClick={() => setScheduleVisible(false)}>
+                关闭
+              </Button>
+            </Space>
+          }
+        >
+          {(() => {
+            const sched = getDriverSchedule(scheduleDriver);
+            const targetStart = dayjs(currentOrder.departureTime);
+            const targetEnd = dayjs(currentOrder.endTime);
+            const hasConflict = sched.events.some(ev => 
+              targetStart.isBefore(ev.end) && targetEnd.isAfter(ev.start)
+            );
+
+            return (
+              <div>
+                <Alert
+                  type={hasConflict ? 'error' : 'success'}
+                  showIcon
+                  title={
+                    hasConflict 
+                      ? '⚠️ 该时段存在冲突' 
+                      : '✅ 该时段可正常派单'
+                  }
+                  description={
+                    <Space>
+                      <Text>用车时段：</Text>
+                      <Tag color="blue">{targetStart.format('HH:mm')} - {targetEnd.format('HH:mm')}</Tag>
+                      <Tag>{currentOrder.storeName} · {currentOrder.peopleCount}人</Tag>
+                    </Space>
+                  }
+                  style={{ marginBottom: 16 }}
+                />
+
+                <Card size="small" title="当日时间轴（08:00 - 24:00）">
+                  <div style={{ position: 'relative', height: 60, background: '#f5f5f5', borderRadius: 6, marginBottom: 16 }}>
+                    {sched.blocks.map((block, idx) => {
+                      const left = ((block.start - sched.startHour) / sched.totalHours) * 100;
+                      const width = ((block.end - block.start) / sched.totalHours) * 100;
+                      const color = block.type === 'idle' ? '#52c41a' :
+                                    block.type === 'inservice' ? '#13c2c2' :
+                                    block.type === 'completed' ? '#8c8c8c' : '#1677ff';
+                      const label = block.type === 'idle' ? '空闲' :
+                                    block.type === 'inservice' ? '服务中' :
+                                    block.type === 'completed' ? '已完成' : '已派单';
+                      return (
+                        <Tooltip
+                          key={idx}
+                          title={
+                            <Space orientation="vertical" size={2} style={{ minWidth: 180 }}>
+                              <Text strong>{label}</Text>
+                              <Text>
+                                {Math.floor(block.start)}:{String(Math.round((block.start%1)*60)).padStart(2,'0')} - {Math.floor(block.end)}:{String(Math.round((block.end%1)*60)).padStart(2,'0')}
+                              </Text>
+                              {block.orderNo && <Text>订单 #{block.orderNo}</Text>}
+                              {block.storeName && <Text>{block.storeName}</Text>}
+                            </Space>
+                          }
+                        >
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: `${left}%`,
+                              width: `${width}%`,
+                              top: 10,
+                              height: 40,
+                              background: color,
+                              color: '#fff',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              borderRadius: 4,
+                              cursor: 'pointer',
+                              overflow: 'hidden',
+                              padding: '0 4px',
+                            }}
+                          >
+                            {block.orderNo ? `#${block.orderNo} · ${label}` : label}
+                          </div>
+                        </Tooltip>
+                      );
+                    })}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 6,
+                        bottom: 6,
+                        left: `${((targetStart.hour() + targetStart.minute()/60 - sched.startHour) / sched.totalHours) * 100}%`,
+                        width: `${((targetEnd.hour() + targetEnd.minute()/60 - targetStart.hour() - targetStart.minute()/60) / sched.totalHours) * 100}%`,
+                        border: `2px dashed ${hasConflict ? '#ff4d4f' : '#faad14'}`,
+                        borderRadius: 6,
+                        background: hasConflict ? 'rgba(255,77,79,0.15)' : 'rgba(250,173,20,0.15)',
+                        pointerEvents: 'none',
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
+                    {Array.from({ length: 9 }).map((_, i) => (
+                      <Text key={i} type="secondary" style={{ fontSize: 11 }}>
+                        {sched.startHour + i * 2}:00
+                      </Text>
+                    ))}
+                  </div>
+
+                  <Row gutter={8}>
+                    <Col span={6}>
+                      <Space>
+                        <div style={{ width: 12, height: 12, background: '#52c41a', borderRadius: 2 }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>空闲</Text>
+                      </Space>
+                    </Col>
+                    <Col span={6}>
+                      <Space>
+                        <div style={{ width: 12, height: 12, background: '#1677ff', borderRadius: 2 }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>已派单</Text>
+                      </Space>
+                    </Col>
+                    <Col span={6}>
+                      <Space>
+                        <div style={{ width: 12, height: 12, background: '#13c2c2', borderRadius: 2 }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>服务中</Text>
+                      </Space>
+                    </Col>
+                    <Col span={6}>
+                      <Space>
+                        <div style={{ width: 12, height: 12, background: '#8c8c8c', borderRadius: 2 }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>已完成</Text>
+                      </Space>
+                    </Col>
+                  </Row>
+                </Card>
+
+                <Card size="small" title="当日订单明细" style={{ marginTop: 12 }}>
+                  {sched.events.length === 0 ? (
+                    <Text type="secondary">当日暂无订单</Text>
+                  ) : (
+                    <List
+                      size="small"
+                      dataSource={sched.events}
+                      renderItem={ev => (
+                        <List.Item>
+                          <List.Item.Meta
+                            title={
+                              <Space>
+                                <Tag color={
+                                  ev.status === '已完成' ? 'default' : 
+                                  ev.status === '服务中' ? 'processing' : 'blue'
+                                }>
+                                  #{ev.orderNo}
+                                </Tag>
+                                <Text strong>{ev.storeName}</Text>
+                                <Text type="secondary">{ev.peopleCount}人</Text>
+                              </Space>
+                            }
+                            description={
+                              <Space>
+                                <Text type="secondary">
+                                  {ev.start.format('HH:mm')} - {ev.end.format('HH:mm')}
+                                </Text>
+                                <Tag color={ev.status === '已完成' ? 'default' : ev.status === '服务中' ? 'processing' : 'blue'}>
+                                  {ev.currentStep || ev.status}
+                                </Tag>
+                              </Space>
+                            }
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </Card>
+              </div>
+            );
+          })()}
+        </Modal>
+      )}
 
       <Modal
         title="补录服务反馈"

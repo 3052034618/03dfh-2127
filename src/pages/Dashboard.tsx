@@ -321,7 +321,7 @@ const Dashboard: React.FC = () => {
             <Button 
               size="small" 
               type="primary" 
-              onClick={() => navigate('/orders')}
+              onClick={() => navigate('/orders?filter=abnormal')}
               icon={<RightOutlined />}
             >
               去订单中心处理
@@ -349,7 +349,7 @@ const Dashboard: React.FC = () => {
                     type="link"
                     size="small"
                     icon={<RightOutlined />}
-                    onClick={() => navigate('/orders')}
+                    onClick={() => navigate(`/orders?filter=abnormal&type=${encodeURIComponent(type)}&orderNo=${order.orderNo}`)}
                   >
                     推进节点
                   </Button>,
