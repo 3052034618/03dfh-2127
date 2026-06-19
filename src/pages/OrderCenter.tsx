@@ -1,0 +1,675 @@
+import React, { useState, useMemo } from 'react';
+import {
+  Table,
+  Button,
+  Space,
+  Tag,
+  Input,
+  Select,
+  Modal,
+  Form,
+  DatePicker,
+  Typography,
+  Card,
+  Avatar,
+  Rate,
+  InputNumber,
+  Radio,
+  Tooltip,
+  List,
+  Popover,
+  message,
+  Row,
+  Col,
+  Empty,
+  Badge,
+} from 'antd';
+import {
+  PlusOutlined,
+  SearchOutlined,
+  ClockCircleOutlined,
+  UserOutlined,
+  StarOutlined,
+  CarOutlined,
+  EnvironmentOutlined,
+  MoonOutlined,
+  ShopOutlined,
+  PhoneOutlined,
+  CheckCircleOutlined,
+  ThunderboltOutlined,
+  TeamOutlined,
+  EditOutlined,
+  EyeOutlined,
+  CheckOutlined,
+} from '@ant-design/icons';
+import { useApp } from '../context/AppContext';
+import type { CarOrder, Driver, DriverTag } from '../types';
+import dayjs from 'dayjs';
+
+const { Title, Text } = Typography;
+const { RangePicker } = DatePicker;
+const { Option } = Select;
+const { TextArea } = Input;
+
+const allPriorityTags: DriverTag[] = ['好约', '准时', '绕路少', '适合大车', '夜间活跃', '服务好', '熟悉路线', '价格公道'];
+
+const tagColorMap: Record<DriverTag, string> = {
+  '好约': 'green',
+  '准时': 'blue',
+  '绕路少': 'cyan',
+  '适合大车': 'purple',
+  '夜间活跃': 'magenta',
+  '服务好': 'gold',
+  '熟悉路线': 'geekblue',
+  '价格公道': 'lime',
+};
+
+const OrderCenter: React.FC = () => {
+  const { orders, stores, getDriversByFilter, addOrder, updateOrder, getEvaluationsByDriver } = useApp();
+  const [searchText, setSearchText] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>();
+  const [publishVisible, setPublishVisible] = useState(false);
+  const [recommendVisible, setRecommendVisible] = useState(false);
+  const [currentOrder, setCurrentOrder] = useState<CarOrder | null>(null);
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [publishForm] = Form.useForm();
+  const [feedbackForm] = Form.useForm();
+
+  const filteredOrders = orders.filter(o => {
+    if (searchText && !o.orderNo.includes(searchText) && !o.storeName.includes(searchText)) {
+      return false;
+    }
+    if (filterStatus && o.status !== filterStatus) return false;
+    return true;
+  });
+
+  const isNightTime = (timeStr: string) => {
+    const hour = dayjs(timeStr).hour();
+    return hour >= 22 || hour < 6;
+  };
+
+  const recommendedDrivers = useMemo(() => {
+    if (!currentOrder) return [];
+    const isNight = isNightTime(currentOrder.departureTime);
+    return getDriversByFilter(currentOrder.storeId, isNight, currentOrder.peopleCount, currentOrder.priorityTags);
+  }, [currentOrder, getDriversByFilter]);
+
+  const handlePublish = () => {
+    publishForm.resetFields();
+    setPublishVisible(true);
+  };
+
+  const handlePublishSubmit = async () => {
+    try {
+      const values = await publishForm.validateFields();
+      const [start, end] = values.timeRange;
+      const newOrder: CarOrder = {
+        id: `o${Date.now()}`,
+        orderNo: `CY${dayjs().format('YYYYMMDD')}${String(orders.length + 1).padStart(3, '0')}`,
+        storeId: values.storeId,
+        storeName: stores.find(s => s.id === values.storeId)?.name || '',
+        departureTime: start.format('YYYY-MM-DD HH:mm'),
+        endTime: end.format('YYYY-MM-DD HH:mm'),
+        peopleCount: values.peopleCount,
+        routeType: values.routeType,
+        destination: values.destination,
+        budget: values.budget,
+        remark: values.remark,
+        status: '待确认',
+        createdAt: dayjs().format('YYYY-MM-DD HH:mm'),
+        priorityTags: values.priorityTags || [],
+      };
+      addOrder(newOrder);
+      message.success('车源需求发布成功！');
+      setPublishVisible(false);
+      setCurrentOrder(newOrder);
+      setRecommendVisible(true);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRecommend = (order: CarOrder) => {
+    setCurrentOrder(order);
+    setRecommendVisible(true);
+  };
+
+  const handleAssignDriver = (driver: Driver) => {
+    if (!currentOrder) return;
+    updateOrder(currentOrder.id, {
+      status: '已派单',
+      driverId: driver.id,
+      driverName: driver.name,
+    });
+    message.success(`已将订单派给 ${driver.name}`);
+    setRecommendVisible(false);
+  };
+
+  const handleFeedback = (order: CarOrder) => {
+    setCurrentOrder(order);
+    feedbackForm.resetFields();
+    feedbackForm.setFieldsValue({
+      actualArrivalTime: order.actualArrivalTime ? dayjs(order.actualArrivalTime, 'YYYY-MM-DD HH:mm') : null,
+      playerFeedback: order.playerFeedback,
+    });
+    setFeedbackVisible(true);
+  };
+
+  const handleFeedbackSubmit = async () => {
+    try {
+      const values = await feedbackForm.validateFields();
+      if (!currentOrder) return;
+      updateOrder(currentOrder.id, {
+        status: '已完成',
+        actualArrivalTime: values.actualArrivalTime ? values.actualArrivalTime.format('YYYY-MM-DD HH:mm') : undefined,
+        playerFeedback: values.playerFeedback,
+      });
+      message.success('反馈已提交，评价数据已沉淀');
+      setFeedbackVisible(false);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const renderDriverEvaluation = (driver: Driver) => {
+    const evals = getEvaluationsByDriver(driver.id).slice(0, 3);
+    if (evals.length === 0) {
+      return <Text type="secondary">暂无历史评价</Text>;
+    }
+    return (
+      <List
+        size="small"
+        style={{ width: 320 }}
+        dataSource={evals}
+        renderItem={item => (
+          <List.Item style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+            <List.Item.Meta
+              avatar={<StarOutlined style={{ color: '#faad14', fontSize: 18 }} />}
+              title={
+                <Space>
+                  <Text strong>{item.createdAt}</Text>
+                  <Rate disabled allowHalf value={(item.punctuality + item.service + item.route) / 3} style={{ fontSize: 12 }} />
+                </Space>
+              }
+              description={
+                <Space orientation="vertical" size={4}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{item.feedback}</Text>
+                  <Space wrap size={4}>
+                    {item.tags.map(t => (
+                      <Tag key={t} color={tagColorMap[t]} style={{ margin: 0, fontSize: 11 }}>{t}</Tag>
+                    ))}
+                  </Space>
+                </Space>
+              }
+            />
+          </List.Item>
+        )}
+      />
+    );
+  };
+
+  const getMatchScore = (driver: Driver) => {
+    if (!currentOrder) return 0;
+    let score = 0;
+    if (currentOrder.priorityTags) {
+      score += currentOrder.priorityTags.filter(t => driver.tags.includes(t)).length * 15;
+    }
+    if (driver.usualStores.includes(currentOrder.storeId)) score += 20;
+    score += Math.round(driver.rating * 6);
+    if (driver.status === '在岗') score += 10;
+    return Math.min(score, 100);
+  };
+
+  const columns = [
+    {
+      title: '订单号',
+      dataIndex: 'orderNo',
+      key: 'orderNo',
+      width: 150,
+      fixed: 'left' as const,
+      render: (val: string) => <Text strong>{val}</Text>,
+    },
+    {
+      title: '门店',
+      dataIndex: 'storeName',
+      key: 'storeName',
+      width: 160,
+      render: (val: string) => (
+        <Space>
+          <ShopOutlined style={{ color: '#13c2c2' }} />
+          <span>{val}</span>
+        </Space>
+      ),
+    },
+    {
+      title: '出发时段',
+      key: 'time',
+      width: 220,
+      render: (_: unknown, record: CarOrder) => {
+        const isNight = isNightTime(record.departureTime);
+        return (
+          <Space orientation="vertical" size={0}>
+            <Space>
+              <ClockCircleOutlined style={{ color: isNight ? '#eb2f96' : '#1677ff' }} />
+              <Text strong>{dayjs(record.departureTime).format('MM-DD HH:mm')}</Text>
+              {isNight && <Tag icon={<MoonOutlined />} color="magenta">夜间</Tag>}
+            </Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              至 {dayjs(record.endTime).format('MM-DD HH:mm')} · {record.routeType}
+            </Text>
+          </Space>
+        );
+      },
+    },
+    {
+      title: '人数',
+      dataIndex: 'peopleCount',
+      key: 'peopleCount',
+      width: 80,
+      render: (val: number) => (
+        <Space>
+          <TeamOutlined />
+          <Text strong>{val}人</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '目的地',
+      dataIndex: 'destination',
+      key: 'destination',
+      ellipsis: true,
+      render: (val?: string) => val ? (
+        <Space>
+          <EnvironmentOutlined style={{ color: '#999' }} />
+          <span>{val}</span>
+        </Space>
+      ) : <Text type="secondary">—</Text>,
+    },
+    {
+      title: '预算',
+      dataIndex: 'budget',
+      key: 'budget',
+      width: 100,
+      render: (val: number) => {
+        const isLow = val < 150;
+        return (
+          <Text strong style={{ color: isLow ? '#ff4d4f' : undefined }}>¥{val}</Text>
+        );
+      },
+    },
+    {
+      title: '司机',
+      key: 'driver',
+      width: 120,
+      render: (_: unknown, record: CarOrder) => record.driverName ? (
+        <Space>
+          <Avatar size="small" icon={<UserOutlined />} />
+          <span>{record.driverName}</span>
+        </Space>
+      ) : <Text type="secondary">未派单</Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (status: string) => {
+        const statusMap: Record<string, { color: string; icon: React.ReactNode }> = {
+          '待确认': { color: 'orange', icon: <ClockCircleOutlined /> },
+          '已派单': { color: 'blue', icon: <CarOutlined /> },
+          '服务中': { color: 'processing', icon: <TeamOutlined /> },
+          '已完成': { color: 'green', icon: <CheckCircleOutlined /> },
+          '已取消': { color: 'default', icon: null },
+        };
+        const cfg = statusMap[status] || { color: 'default', icon: null };
+        return <Tag color={cfg.color} icon={cfg.icon}>{status}</Tag>;
+      },
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 220,
+      fixed: 'right' as const,
+      render: (_: unknown, record: CarOrder) => (
+        <Space size="small">
+          {record.status === '待确认' && (
+            <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={() => handleRecommend(record)}>
+              智能派单
+            </Button>
+          )}
+          {record.status === '已派单' && (
+            <Button size="small" icon={<CheckOutlined />} onClick={() => handleFeedback(record)}>
+              完成服务
+            </Button>
+          )}
+          {record.status === '已完成' && !record.playerFeedback && (
+            <Button size="small" icon={<EditOutlined />} onClick={() => handleFeedback(record)}>
+              补录反馈
+            </Button>
+          )}
+          <Tooltip title="查看详情">
+            <Button type="text" size="small" icon={<EyeOutlined />} />
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <Title level={3} style={{ marginTop: 0 }}>订单中心</Title>
+      <Text type="secondary">门店发布包场车源，智能匹配推荐司机，跟踪订单状态</Text>
+
+      <Card style={{ marginTop: 16 }} size="small">
+        <Space wrap>
+          <Input
+            prefix={<SearchOutlined />}
+            placeholder="搜索订单号/门店"
+            style={{ width: 240 }}
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            allowClear
+          />
+          <Select
+            placeholder="按状态筛选"
+            style={{ width: 140 }}
+            value={filterStatus}
+            onChange={setFilterStatus}
+            allowClear
+          >
+            <Option value="待确认">待确认</Option>
+            <Option value="已派单">已派单</Option>
+            <Option value="服务中">服务中</Option>
+            <Option value="已完成">已完成</Option>
+          </Select>
+          <div style={{ flex: 1 }} />
+          <Button type="primary" icon={<PlusOutlined />} onClick={handlePublish}>
+            发布车源需求
+          </Button>
+        </Space>
+      </Card>
+
+      <Table
+        style={{ marginTop: 16 }}
+        dataSource={filteredOrders}
+        columns={columns}
+        rowKey="id"
+        scroll={{ x: 1300 }}
+        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条订单` }}
+      />
+
+      <Modal
+        title="发布车源需求"
+        open={publishVisible}
+        onCancel={() => setPublishVisible(false)}
+        onOk={handlePublishSubmit}
+        width={680}
+        okText="发布并匹配司机"
+        cancelText="取消"
+      >
+        <Form form={publishForm} layout="vertical">
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="storeId" label="出发门店" rules={[{ required: true, message: '请选择门店' }]}>
+                <Select placeholder="选择出发门店">
+                  {stores.map(s => (
+                    <Option key={s.id} value={s.id}>{s.name}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="routeType" label="用车类型" rules={[{ required: true }]} initialValue="包场">
+                <Radio.Group>
+                  <Radio.Button value="包场">包场</Radio.Button>
+                  <Radio.Button value="单程">单程</Radio.Button>
+                  <Radio.Button value="往返">往返</Radio.Button>
+                </Radio.Group>
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="timeRange" label="用车时段" rules={[{ required: true, message: '请选择用车时间' }]}>
+                <RangePicker
+                  showTime={{ format: 'HH:mm' }}
+                  format="YYYY-MM-DD HH:mm"
+                  style={{ width: '100%' }}
+                  placeholder={['出发时间', '散场时间']}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="peopleCount" label="人数" rules={[{ required: true, message: '请输入人数' }]}>
+                <InputNumber min={1} max={50} style={{ width: '100%' }} placeholder="请输入乘车人数" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="budget" label="预算（元）" rules={[{ required: true, message: '请输入预算' }]}>
+                <InputNumber min={50} max={5000} style={{ width: '100%' }} placeholder="本次用车预算" prefix="¥" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="destination" label="目的地">
+                <Input placeholder="目的地地址或区域，如：国贸地铁站" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="priorityTags" label="优先标签">
+                <Select mode="multiple" placeholder="选择优先匹配的司机标签（可多选）">
+                  {allPriorityTags.map(t => (
+                    <Option key={t} value={t}>{t}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="remark" label="备注">
+                <TextArea rows={3} placeholder="其他说明，如：需要搬运、VIP客户等" />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={
+          <Space>
+            <ThunderboltOutlined style={{ color: '#1677ff' }} />
+            <span>智能推荐司机 - {currentOrder?.orderNo}</span>
+          </Space>
+        }
+        open={recommendVisible}
+        onCancel={() => setRecommendVisible(false)}
+        width={900}
+        footer={null}
+      >
+        {currentOrder && (
+          <div>
+            <Card size="small" style={{ marginBottom: 16, background: '#f5faff', border: '1px solid #d6e4ff' }}>
+              <Row gutter={16}>
+                <Col span={6}>
+                  <Text type="secondary">门店</Text>
+                  <div><Text strong>{currentOrder.storeName}</Text></div>
+                </Col>
+                <Col span={6}>
+                  <Text type="secondary">出发时间</Text>
+                  <div><Text strong>{currentOrder.departureTime}</Text></div>
+                </Col>
+                <Col span={6}>
+                  <Text type="secondary">人数 / 预算</Text>
+                  <div><Text strong>{currentOrder.peopleCount}人 / ¥{currentOrder.budget}</Text></div>
+                </Col>
+                <Col span={6}>
+                  <Text type="secondary">优先标签</Text>
+                  <div>
+                    <Space wrap size={4}>
+                      {currentOrder.priorityTags?.map(t => (
+                        <Tag key={t} color={tagColorMap[t]}>{t}</Tag>
+                      )) || <Text type="secondary">无</Text>}
+                    </Space>
+                  </div>
+                </Col>
+              </Row>
+            </Card>
+
+            {recommendedDrivers.length === 0 ? (
+              <Empty description="暂无匹配的司机，请尝试调整筛选条件或联系车队" />
+            ) : (
+              <List
+                dataSource={recommendedDrivers.slice(0, 6)}
+                renderItem={(driver, index) => {
+                  const score = getMatchScore(driver);
+                  return (
+                    <List.Item
+                      key={driver.id}
+                      style={{
+                        padding: '16px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                        marginBottom: 12,
+                        background: index === 0 ? '#f6ffed' : '#fff',
+                      }}
+                      actions={[
+                        <Button type="primary" icon={<CheckOutlined />} onClick={() => handleAssignDriver(driver)}>
+                          指派该司机
+                        </Button>
+                      ]}
+                    >
+                      <List.Item.Meta
+                        avatar={
+                          <Badge count={index === 0 ? '最佳匹配' : 0} style={{ backgroundColor: index === 0 ? '#52c41a' : '#1677ff' }}>
+                            <Avatar size={48} icon={<UserOutlined />} style={{ backgroundColor: '#1677ff' }}>
+                              {driver.name.charAt(0)}
+                            </Avatar>
+                          </Badge>
+                        }
+                        title={
+                          <Space>
+                            <Text strong style={{ fontSize: 16 }}>{driver.name}</Text>
+                            {driver.fleetName && <Tag color="geekblue">{driver.fleetName}</Tag>}
+                            <Tag color={driver.status === '在岗' ? 'green' : driver.status === '出车中' ? 'blue' : 'default'}>
+                              {driver.status}
+                            </Tag>
+                            <Rate disabled allowHalf value={driver.rating} style={{ fontSize: 14 }} />
+                            <Text strong style={{ color: '#faad14' }}>{driver.rating}</Text>
+                            <Text type="secondary">({driver.totalOrders}单)</Text>
+                          </Space>
+                        }
+                        description={
+                          <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+                            <Space wrap size={8}>
+                              <Space>
+                                <CarOutlined style={{ color: '#666' }} />
+                                <span>{driver.carType} · {driver.carCapacity}座</span>
+                              </Space>
+                              <Space>
+                                <PhoneOutlined style={{ color: '#52c41a' }} />
+                                <span>{driver.phone}</span>
+                              </Space>
+                              <Space>
+                                <EnvironmentOutlined style={{ color: '#999' }} />
+                                <span>{driver.serviceAreas.join('、')}</span>
+                              </Space>
+                              {driver.nightService && (
+                                <Tag icon={<MoonOutlined />} color="magenta">可夜间接单</Tag>
+                              )}
+                            </Space>
+                            <Space wrap size={4}>
+                              {driver.tags.map(t => {
+                                const isPriority = currentOrder.priorityTags?.includes(t);
+                                return (
+                                  <Tag
+                                    key={t}
+                                    color={tagColorMap[t]}
+                                    style={{
+                                      margin: 0,
+                                      border: isPriority ? '2px solid #1677ff' : undefined,
+                                      fontWeight: isPriority ? 600 : 400,
+                                    }}
+                                  >
+                                    {isPriority ? '★ ' : ''}{t}
+                                  </Tag>
+                                );
+                              })}
+                            </Space>
+                            <Space size={16} style={{ width: '100%' }}>
+                              <div style={{ flex: 1 }}>
+                                <Text type="secondary" style={{ fontSize: 12 }}>匹配度</Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <div style={{ flex: 1, height: 8, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
+                                    <div
+                                      style={{
+                                        height: '100%',
+                                        width: `${score}%`,
+                                        background: score >= 80 ? '#52c41a' : score >= 60 ? '#1677ff' : '#faad14',
+                                        borderRadius: 4,
+                                      }}
+                                    />
+                                  </div>
+                                  <Text strong style={{ color: score >= 80 ? '#52c41a' : score >= 60 ? '#1677ff' : '#faad14' }}>
+                                    {score}分
+                                  </Text>
+                                </div>
+                              </div>
+                              <Popover content={renderDriverEvaluation(driver)} title="最近服务评价" trigger="click">
+                                <Button type="link" size="small" icon={<StarOutlined />}>查看历史评价</Button>
+                              </Popover>
+                            </Space>
+                          </Space>
+                        }
+                      />
+                    </List.Item>
+                  );
+                }}
+              />
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        title="补录服务反馈"
+        open={feedbackVisible}
+        onCancel={() => setFeedbackVisible(false)}
+        onOk={handleFeedbackSubmit}
+        okText="提交反馈"
+        cancelText="取消"
+      >
+        {currentOrder && (
+          <div>
+            <Card size="small" style={{ marginBottom: 16 }}>
+              <Space orientation="vertical" size={4}>
+                <Text>订单号：<Text strong>{currentOrder.orderNo}</Text></Text>
+                <Text>门店：{currentOrder.storeName}</Text>
+                <Text>司机：{currentOrder.driverName || '未派单'}</Text>
+                <Text>出发时间：{currentOrder.departureTime}</Text>
+              </Space>
+            </Card>
+            <Form form={feedbackForm} layout="vertical">
+              <Form.Item
+                name="actualArrivalTime"
+                label="实际到店时间"
+                rules={[{ required: true, message: '请选择实际到店时间' }]}
+              >
+                <DatePicker
+                  showTime={{ format: 'HH:mm' }}
+                  format="YYYY-MM-DD HH:mm"
+                  style={{ width: '100%' }}
+                  placeholder="选择司机实际到达时间"
+                />
+              </Form.Item>
+              <Form.Item
+                name="playerFeedback"
+                label="玩家反馈"
+                rules={[{ required: true, message: '请输入玩家反馈' }]}
+              >
+                <TextArea rows={4} placeholder="记录玩家乘车体验、司机服务情况等" />
+              </Form.Item>
+            </Form>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+};
+
+export default OrderCenter;
