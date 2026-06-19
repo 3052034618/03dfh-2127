@@ -105,7 +105,15 @@ export const mockOrders: CarOrder[] = [
     departureTime: '2026-06-20 23:00', endTime: '2026-06-20 23:45',
     peopleCount: 6, routeType: '单程', destination: '中关村地铁站',
     budget: 120, remark: '玩家散场送地铁站',
-    status: '已派单', driverId: 'd4', driverName: '赵德才',
+    status: '服务中', driverId: 'd4', driverName: '赵德才',
+    currentStep: '司机已出发',
+    stepTimestamps: {
+      '已派单': '2026-06-20 12:00',
+      '司机已出发': '2026-06-20 22:40',
+      '已到店': '',
+      '已接到玩家': '',
+      '送达完成': '',
+    } as any,
     createdAt: '2026-06-20 11:30',
     priorityTags: ['好约', '准时']
   },
@@ -125,6 +133,14 @@ export const mockOrders: CarOrder[] = [
     peopleCount: 12, routeType: '往返', destination: '王府井地铁站',
     budget: 300, remark: '老玩家VIP场次',
     status: '已完成', driverId: 'd1', driverName: '张明远',
+    currentStep: '送达完成',
+    stepTimestamps: {
+      '已派单': '2026-06-19 15:00',
+      '司机已出发': '2026-06-19 21:40',
+      '已到店': '2026-06-19 21:55',
+      '已接到玩家': '2026-06-19 22:05',
+      '送达完成': '2026-06-19 23:25',
+    } as any,
     actualArrivalTime: '2026-06-19 21:55',
     playerFeedback: '司机很准时，服务态度好，路线熟悉',
     createdAt: '2026-06-19 14:00'
@@ -145,6 +161,14 @@ export const mockOrders: CarOrder[] = [
     peopleCount: 8, routeType: '单程', destination: '望京SOHO',
     budget: 150, remark: '',
     status: '已完成', driverId: 'd8', driverName: '吴海涛',
+    currentStep: '送达完成',
+    stepTimestamps: {
+      '已派单': '2026-06-19 21:00',
+      '司机已出发': '2026-06-19 23:10',
+      '已到店': '2026-06-19 23:28',
+      '已接到玩家': '2026-06-19 23:35',
+      '送达完成': '2026-06-20 00:20',
+    } as any,
     actualArrivalTime: '2026-06-19 23:28',
     playerFeedback: '夜间接单很快，车内干净',
     createdAt: '2026-06-19 20:00'
@@ -156,6 +180,14 @@ export const mockOrders: CarOrder[] = [
     peopleCount: 20, routeType: '包场', destination: '怀柔团建基地',
     budget: 650, remark: '跨区支援，全天包场',
     status: '已派单', driverId: 'd5', driverName: '刘国庆',
+    currentStep: '已派单',
+    stepTimestamps: {
+      '已派单': '2026-06-20 08:30',
+      '司机已出发': '',
+      '已到店': '',
+      '已接到玩家': '',
+      '送达完成': '',
+    } as any,
     createdAt: '2026-06-20 08:00',
     priorityTags: ['适合大车', '熟悉路线', '服务好']
   },
@@ -172,14 +204,14 @@ export const mockOrders: CarOrder[] = [
 
 export const mockEvaluations: OrderEvaluation[] = [
   {
-    id: 'e1', driverId: 'd1', driverName: '张明远', orderId: 'o4',
+    id: 'e1', driverId: 'd1', driverName: '张明远', orderId: 'o4', orderNo: 'CY20260619008',
     punctuality: 5, service: 5, route: 5,
     feedback: '提前10分钟到店，主动帮忙搬运行李，路线规划合理，全程无绕路',
     tags: ['准时', '服务好', '绕路少', '熟悉路线'],
     createdAt: '2026-06-20 10:30'
   },
   {
-    id: 'e2', driverId: 'd8', driverName: '吴海涛', orderId: 'o6',
+    id: 'e2', driverId: 'd8', driverName: '吴海涛', orderId: 'o6', orderNo: 'CY20260619009',
     punctuality: 5, service: 4, route: 5,
     feedback: '夜间接单响应快，车内整洁，驾驶平稳',
     tags: ['夜间活跃', '准时', '服务好'],

@@ -98,6 +98,15 @@ const EvaluationPage: React.FC = () => {
       },
     },
     {
+      title: '对应订单',
+      dataIndex: 'orderNo',
+      key: 'orderNo',
+      width: 160,
+      render: (val?: string) => val ? (
+        <Tag color="blue">#{val}</Tag>
+      ) : <Text type="secondary">—</Text>,
+    },
+    {
       title: '综合评分',
       key: 'score',
       width: 220,

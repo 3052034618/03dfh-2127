@@ -1,5 +1,5 @@
 import React from 'react';
-import { Row, Col, Card, Statistic, Table, Tag, Progress, Space, Typography, Badge, Alert } from 'antd';
+import { Row, Col, Card, Statistic, Table, Tag, Progress, Space, Typography, Badge, Alert, Steps } from 'antd';
 import {
   CarOutlined,
   ClockCircleOutlined,
@@ -8,7 +8,7 @@ import {
   TeamOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
-import { useApp } from '../context/AppContext';
+import { useApp, SERVICE_STEPS } from '../context/AppContext';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -161,6 +161,37 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      <Card 
+        style={{ marginTop: 16 }} 
+        size="small"
+        title={
+          <Space>
+            <Badge status="processing" />
+            <span>服务进度追踪</span>
+          </Space>
+        }
+      >
+        <Steps
+          size="small"
+          current={-1}
+          items={SERVICE_STEPS.map(step => {
+            const count = orders.filter(o => o.currentStep === step).length;
+            return {
+              title: step,
+              description: count > 0 ? `${count} 单` : '',
+              status: count > 0 ? 'process' : 'wait',
+              icon: count > 0 ? (
+                <Badge count={count} size="small" style={{ backgroundColor: '#1677ff' }}>
+                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 12, color: '#1677ff', fontWeight: 600 }}>{count}</Text>
+                  </div>
+                </Badge>
+              ) : undefined,
+            };
+          })}
+        />
+      </Card>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={12}>

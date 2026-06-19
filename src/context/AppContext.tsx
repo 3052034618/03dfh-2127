@@ -1,7 +1,10 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import type { Driver, Fleet, Store, CarOrder, OrderEvaluation, DriverTag } from '../types';
+import type { Driver, Fleet, Store, CarOrder, OrderEvaluation, DriverTag, ServiceStep } from '../types';
 import { mockDrivers, mockFleets, mockStores, mockOrders, mockEvaluations } from '../data/mockData';
+import dayjs from 'dayjs';
+
+export const SERVICE_STEPS: ServiceStep[] = ['已派单', '司机已出发', '已到店', '已接到玩家', '送达完成'];
 
 interface AppContextType {
   drivers: Driver[];
@@ -15,6 +18,8 @@ interface AppContextType {
   updateOrder: (id: string, order: Partial<CarOrder>) => void;
   addEvaluation: (evaluation: OrderEvaluation) => void;
   updateFleet: (id: string, fleet: Partial<Fleet>) => void;
+  assignDriverToOrder: (orderId: string, driver: Driver) => void;
+  advanceOrderStep: (orderId: string) => void;
   getDriversByFilter: (storeId?: string, isNight?: boolean, peopleCount?: number, tags?: DriverTag[]) => Driver[];
   getEvaluationsByDriver: (driverId: string) => OrderEvaluation[];
 }
@@ -49,6 +54,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const updateOrder = useCallback((id: string, updates: Partial<CarOrder>) => {
     setOrders(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
+  }, []);
+
+  const assignDriverToOrder = useCallback((orderId: string, driver: Driver) => {
+    const now = dayjs().format('YYYY-MM-DD HH:mm');
+    const stepTimestamps = {
+      '已派单': now,
+      '司机已出发': '',
+      '已到店': '',
+      '已接到玩家': '',
+      '送达完成': '',
+    } as Record<ServiceStep, string>;
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      status: '已派单',
+      driverId: driver.id,
+      driverName: driver.name,
+      currentStep: '已派单',
+      stepTimestamps,
+    } : o));
+  }, []);
+
+  const advanceOrderStep = useCallback((orderId: string) => {
+    const now = dayjs().format('YYYY-MM-DD HH:mm');
+    setOrders(prev => prev.map(o => {
+      if (o.id !== orderId) return o;
+      const currentIndex = o.currentStep ? SERVICE_STEPS.indexOf(o.currentStep) : -1;
+      if (currentIndex >= SERVICE_STEPS.length - 1) return o;
+      const nextStep = SERVICE_STEPS[currentIndex + 1];
+      const newTimestamps = {
+        ...(o.stepTimestamps || {} as Record<ServiceStep, string>),
+        [nextStep]: now,
+      };
+      const newStatus = nextStep === '送达完成' ? '已完成' : (currentIndex >= 0 ? '服务中' : o.status);
+      return {
+        ...o,
+        currentStep: nextStep,
+        stepTimestamps: newTimestamps,
+        status: newStatus,
+        actualArrivalTime: nextStep === '已到店' ? now : o.actualArrivalTime,
+      };
+    }));
   }, []);
 
   const addEvaluation = useCallback((evaluation: OrderEvaluation) => {
@@ -91,6 +137,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     <AppContext.Provider value={{
       drivers, fleets, stores, orders, evaluations,
       addDriver, updateDriver, addOrder, updateOrder, addEvaluation, updateFleet,
+      assignDriverToOrder, advanceOrderStep,
       getDriversByFilter, getEvaluationsByDriver
     }}>
       {children}

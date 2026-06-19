@@ -411,7 +411,7 @@ const DriverManagement: React.FC = () => {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="nightService" label="夜间接单" valuePropName="checked">
+              <Form.Item name="nightService" label="夜间接单" rules={[{ required: true }]}>
                 <Select>
                   <Option value={true}>夜间可接单</Option>
                   <Option value={false}>仅白天</Option>

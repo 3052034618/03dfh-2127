@@ -21,8 +21,8 @@ import {
   message,
   Row,
   Col,
-  Empty,
   Badge,
+  Steps,
 } from 'antd';
 import {
   PlusOutlined,
@@ -42,7 +42,7 @@ import {
   EyeOutlined,
   CheckOutlined,
 } from '@ant-design/icons';
-import { useApp } from '../context/AppContext';
+import { useApp, SERVICE_STEPS } from '../context/AppContext';
 import type { CarOrder, Driver, DriverTag } from '../types';
 import dayjs from 'dayjs';
 
@@ -65,7 +65,7 @@ const tagColorMap: Record<DriverTag, string> = {
 };
 
 const OrderCenter: React.FC = () => {
-  const { orders, stores, drivers, getDriversByFilter, addOrder, updateOrder, getEvaluationsByDriver, addEvaluation, updateDriver } = useApp();
+  const { orders, stores, drivers, fleets, getDriversByFilter, addOrder, updateOrder, getEvaluationsByDriver, addEvaluation, updateDriver, assignDriverToOrder, advanceOrderStep } = useApp();
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>();
   const [publishVisible, setPublishVisible] = useState(false);
@@ -136,11 +136,7 @@ const OrderCenter: React.FC = () => {
 
   const handleAssignDriver = (driver: Driver) => {
     if (!currentOrder) return;
-    updateOrder(currentOrder.id, {
-      status: '已派单',
-      driverId: driver.id,
-      driverName: driver.name,
-    });
+    assignDriverToOrder(currentOrder.id, driver);
     message.success(`已将订单派给 ${driver.name}`);
     setRecommendVisible(false);
   };
@@ -175,16 +171,18 @@ const OrderCenter: React.FC = () => {
         playerFeedback: values.playerFeedback,
       });
 
+      const newTags = values.tags || [];
       const evaluation = {
         id: `e${Date.now()}`,
         driverId: currentOrder.driverId,
         driverName: currentOrder.driverName,
         orderId: currentOrder.id,
+        orderNo: currentOrder.orderNo,
         punctuality: values.punctuality,
         service: values.service,
         route: values.route,
         feedback: values.playerFeedback,
-        tags: values.tags || [],
+        tags: newTags,
         createdAt: dayjs().format('YYYY-MM-DD HH:mm'),
       };
       addEvaluation(evaluation);
@@ -195,9 +193,11 @@ const OrderCenter: React.FC = () => {
         const avgRating = evals.length > 0 
           ? evals.reduce((sum, e) => sum + (e.punctuality + e.service + e.route) / 3, 0) / evals.length
           : 5;
+        const mergedTags = [...new Set([...driver.tags, ...newTags])] as DriverTag[];
         updateDriver(currentOrder.driverId, {
           rating: Math.round(avgRating * 100) / 100,
           totalOrders: driver.totalOrders + 1,
+          tags: mergedTags,
         });
       }
 
@@ -255,6 +255,70 @@ const OrderCenter: React.FC = () => {
     score += Math.round(driver.rating * 6);
     if (driver.status === '在岗') score += 10;
     return Math.min(score, 100);
+  };
+
+  const getRecommendReasons = (driver: Driver): string[] => {
+    if (!currentOrder) return [];
+    const reasons: string[] = [];
+    if (driver.usualStores.includes(currentOrder.storeId)) {
+      reasons.push('常跑这家门店，路线熟');
+    }
+    const isNight = isNightTime(currentOrder.endTime);
+    if (isNight && driver.nightService) {
+      reasons.push('夜间接单稳定');
+    }
+    const latestEvals = getEvaluationsByDriver(driver.id).slice(0, 3);
+    const recentTags = new Set<DriverTag>();
+    latestEvals.forEach(e => e.tags.forEach(t => recentTags.add(t)));
+    if (recentTags.has('准时')) reasons.push('最近评价都提到准时');
+    if (recentTags.has('绕路少')) reasons.push('最近评价说绕路少');
+    if (recentTags.has('服务好')) reasons.push('最近服务评价好');
+    if (driver.fleetName && fleets.find(f => f.name === driver.fleetName)?.cooperationLevel === 'A级') {
+      reasons.push('A级合作车队，靠谱');
+    }
+    if (driver.carCapacity === currentOrder.peopleCount || driver.carCapacity - currentOrder.peopleCount <= 3) {
+      reasons.push('车型大小刚刚好');
+    }
+    return reasons.slice(0, 3);
+  };
+
+  const getGapReasons = (): string[] => {
+    if (!currentOrder) return [];
+    const reasons: string[] = [];
+    const isNight = isNightTime(currentOrder.endTime);
+    const allAreaDrivers = drivers.filter(d => {
+      const store = stores.find(s => s.id === currentOrder.storeId);
+      return store && (d.usualStores.includes(currentOrder.storeId) || d.serviceAreas.includes(store.district));
+    });
+    if (allAreaDrivers.length < 3) {
+      reasons.push('这个门店周边合作司机偏少');
+    }
+    if (isNight) {
+      const nightDrivers = allAreaDrivers.filter(d => d.nightService && d.status !== '休息');
+      if (nightDrivers.length === 0) {
+        reasons.push('夜间接单的司机都休息或出车中');
+      } else if (nightDrivers.filter(d => d.carCapacity >= currentOrder.peopleCount).length === 0) {
+        reasons.push('夜间可接大车的司机紧张');
+      }
+    }
+    if (currentOrder.peopleCount > 20) {
+      const bigDrivers = allAreaDrivers.filter(d => d.carCapacity >= currentOrder.peopleCount);
+      if (bigDrivers.length < 2) {
+        reasons.push(`${currentOrder.peopleCount}人以上的大车资源紧俏`);
+      }
+    }
+    if (currentOrder.budget < 150) {
+      reasons.push('预算偏低，可能需要协调车队加价');
+    }
+    if (currentOrder.priorityTags && currentOrder.priorityTags.length > 0) {
+      const tagMatchDrivers = allAreaDrivers.filter(d => 
+        currentOrder.priorityTags?.some(t => d.tags.includes(t))
+      );
+      if (tagMatchDrivers.length === 0) {
+        reasons.push('符合全部标签的司机很少，建议放宽条件');
+      }
+    }
+    return reasons.length > 0 ? reasons : ['当前条件下可用司机较少，建议联系车队调度'];
   };
 
   const columns = [
@@ -346,49 +410,98 @@ const OrderCenter: React.FC = () => {
       ) : <Text type="secondary">未派单</Text>,
     },
     {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 100,
-      render: (status: string) => {
-        const statusMap: Record<string, { color: string; icon: React.ReactNode }> = {
-          '待确认': { color: 'orange', icon: <ClockCircleOutlined /> },
-          '已派单': { color: 'blue', icon: <CarOutlined /> },
-          '服务中': { color: 'processing', icon: <TeamOutlined /> },
-          '已完成': { color: 'green', icon: <CheckCircleOutlined /> },
-          '已取消': { color: 'default', icon: null },
-        };
-        const cfg = statusMap[status] || { color: 'default', icon: null };
-        return <Tag color={cfg.color} icon={cfg.icon}>{status}</Tag>;
+      title: '服务进度',
+      key: 'progress',
+      width: 280,
+      render: (_: unknown, record: CarOrder) => {
+        if (record.status === '待确认') {
+          return <Tag color="orange" icon={<ClockCircleOutlined />}>待确认</Tag>;
+        }
+        if (record.status === '已取消') {
+          return <Tag color="default">已取消</Tag>;
+        }
+        const currentIndex = record.currentStep ? SERVICE_STEPS.indexOf(record.currentStep) : -1;
+        return (
+          <Popover
+            content={
+              <Space orientation="vertical" size="small" style={{ width: 200 }}>
+                {SERVICE_STEPS.map((step, idx) => (
+                  <Space key={step}>
+                    {idx <= currentIndex ? (
+                      <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    ) : (
+                      <ClockCircleOutlined style={{ color: '#d9d9d9' }} />
+                    )}
+                    <Text type={idx <= currentIndex ? undefined : 'secondary'}>{step}</Text>
+                    {record.stepTimestamps?.[step] && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {record.stepTimestamps[step]}
+                      </Text>
+                    )}
+                  </Space>
+                ))}
+              </Space>
+            }
+            title="服务节点详情"
+            trigger="hover"
+          >
+            <Steps
+              size="small"
+              current={currentIndex + 1}
+              items={SERVICE_STEPS.map(() => ({
+                title: '',
+                description: '',
+              }))}
+              style={{ minWidth: 240 }}
+            />
+            <Tag 
+              color={record.status === '已完成' ? 'green' : 'blue'} 
+              style={{ marginTop: 4 }}
+            >
+              {record.currentStep || record.status}
+            </Tag>
+          </Popover>
+        );
       },
     },
     {
       title: '操作',
       key: 'action',
-      width: 220,
+      width: 260,
       fixed: 'right' as const,
-      render: (_: unknown, record: CarOrder) => (
-        <Space size="small">
-          {record.status === '待确认' && (
-            <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={() => handleRecommend(record)}>
-              智能派单
-            </Button>
-          )}
-          {record.status === '已派单' && (
-            <Button size="small" icon={<CheckOutlined />} onClick={() => handleFeedback(record)}>
-              完成服务
-            </Button>
-          )}
-          {record.status === '已完成' && !record.playerFeedback && (
-            <Button size="small" icon={<EditOutlined />} onClick={() => handleFeedback(record)}>
-              补录反馈
-            </Button>
-          )}
-          <Tooltip title="查看详情">
-            <Button type="text" size="small" icon={<EyeOutlined />} />
-          </Tooltip>
-        </Space>
-      ),
+      render: (_: unknown, record: CarOrder) => {
+        const canAdvance = record.currentStep && SERVICE_STEPS.indexOf(record.currentStep) < SERVICE_STEPS.length - 1;
+        const nextStep = record.currentStep 
+          ? SERVICE_STEPS[SERVICE_STEPS.indexOf(record.currentStep) + 1]
+          : null;
+        return (
+          <Space size="small" wrap>
+            {record.status === '待确认' && (
+              <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={() => handleRecommend(record)}>
+                智能派单
+              </Button>
+            )}
+            {canAdvance && record.status !== '已完成' && (
+              <Button size="small" type="primary" ghost onClick={() => {
+                advanceOrderStep(record.id);
+                message.success(`已推进到「${nextStep}」`);
+              }}>
+                {nextStep}
+              </Button>
+            )}
+            {record.status === '已完成' && !record.playerFeedback && (
+              <Button size="small" icon={<EditOutlined />} onClick={() => handleFeedback(record)}>
+                补录反馈
+              </Button>
+            )}
+            {record.status === '已完成' && record.playerFeedback && (
+              <Tooltip title="查看详情">
+                <Button type="text" size="small" icon={<EyeOutlined />} />
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -549,8 +662,30 @@ const OrderCenter: React.FC = () => {
             </Card>
 
             {recommendedDrivers.length === 0 ? (
-              <Empty description="暂无匹配的司机，请尝试调整筛选条件或联系车队" />
-            ) : (
+              <Card size="small" style={{ background: '#fff2f0', border: '1px solid #ffccc7' }}>
+              <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                <div>
+                  <Text strong style={{ color: '#cf1322', fontSize: 15 }}>
+                    ⚠️ 暂未找到合适的司机
+                  </Text>
+                </div>
+                <div>
+                  <Text type="secondary" style={{ fontSize: 13 }}>缺口分析：</Text>
+                  <Space orientation="vertical" size="small" style={{ marginTop: 8, width: '100%' }}>
+                    {getGapReasons().map((reason, idx) => (
+                      <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <Text style={{ color: '#cf1322' }}>•</Text>
+                      <Text>{reason}</Text>
+                      </div>
+                    ))}
+                  </Space>
+                </div>
+                <Button type="primary" danger ghost>
+                  联系车队协调
+                </Button>
+              </Space>
+            </Card>
+          ) : (
               <List
                 dataSource={recommendedDrivers.slice(0, 6)}
                 renderItem={(driver, index) => {
@@ -628,6 +763,23 @@ const OrderCenter: React.FC = () => {
                                 );
                               })}
                             </Space>
+                            {getRecommendReasons(driver).length > 0 && (
+                              <div style={{ 
+                                background: '#f6ffed', 
+                                padding: '8px 12px', 
+                                borderRadius: 6,
+                                border: '1px solid #b7eb8f',
+                              }}>
+                                <Text strong style={{ color: '#389e0d', fontSize: 12 }}>💡 推荐理由</Text>
+                                <Space wrap size={[8, 4]} style={{ marginTop: 4 }}>
+                                  {getRecommendReasons(driver).map((reason, idx) => (
+                                    <Tag key={idx} color="success" style={{ margin: 0, fontSize: 12 }}>
+                                      {reason}
+                                    </Tag>
+                                  ))}
+                                </Space>
+                              </div>
+                            )}
                             <Space size={16} style={{ width: '100%' }}>
                               <div style={{ flex: 1 }}>
                                 <Text type="secondary" style={{ fontSize: 12 }}>匹配度</Text>
