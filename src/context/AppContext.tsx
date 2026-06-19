@@ -14,6 +14,7 @@ interface AppContextType {
   addOrder: (order: CarOrder) => void;
   updateOrder: (id: string, order: Partial<CarOrder>) => void;
   addEvaluation: (evaluation: OrderEvaluation) => void;
+  updateFleet: (id: string, fleet: Partial<Fleet>) => void;
   getDriversByFilter: (storeId?: string, isNight?: boolean, peopleCount?: number, tags?: DriverTag[]) => Driver[];
   getEvaluationsByDriver: (driverId: string) => OrderEvaluation[];
 }
@@ -22,7 +23,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [drivers, setDrivers] = useState<Driver[]>(mockDrivers);
-  const [fleets] = useState<Fleet[]>(mockFleets);
+  const [fleets, setFleets] = useState<Fleet[]>(mockFleets);
   const [stores] = useState<Store[]>(mockStores);
   const [orders, setOrders] = useState<CarOrder[]>(mockOrders);
   const [evaluations, setEvaluations] = useState<OrderEvaluation[]>(mockEvaluations);
@@ -33,6 +34,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const updateDriver = useCallback((id: string, updates: Partial<Driver>) => {
     setDrivers(prev => prev.map(d => d.id === id ? { ...d, ...updates } : d));
+  }, []);
+
+  const updateFleet = useCallback((id: string, updates: Partial<Fleet>) => {
+    setFleets(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
+    if (updates.name) {
+      setDrivers(prev => prev.map(d => d.fleetId === id ? { ...d, fleetName: updates.name } : d));
+    }
   }, []);
 
   const addOrder = useCallback((order: CarOrder) => {
@@ -82,7 +90,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   return (
     <AppContext.Provider value={{
       drivers, fleets, stores, orders, evaluations,
-      addDriver, updateDriver, addOrder, updateOrder, addEvaluation,
+      addDriver, updateDriver, addOrder, updateOrder, addEvaluation, updateFleet,
       getDriversByFilter, getEvaluationsByDriver
     }}>
       {children}

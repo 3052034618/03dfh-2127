@@ -17,6 +17,7 @@ import {
   Row,
   Col,
   Card,
+  message,
 } from 'antd';
 import {
   PlusOutlined,
@@ -51,7 +52,7 @@ const tagColorMap: Record<DriverTag, string> = {
 };
 
 const DriverManagement: React.FC = () => {
-  const { drivers, fleets, stores, getEvaluationsByDriver } = useApp();
+  const { drivers, fleets, stores, getEvaluationsByDriver, addDriver, updateDriver } = useApp();
   const [searchText, setSearchText] = useState('');
   const [filterTag, setFilterTag] = useState<DriverTag | undefined>();
   const [filterStatus, setFilterStatus] = useState<string>();
@@ -71,13 +72,57 @@ const DriverManagement: React.FC = () => {
   const handleAdd = () => {
     setEditingDriver(null);
     form.resetFields();
+    form.setFieldsValue({
+      nightService: false,
+      status: '在岗',
+    });
     setModalVisible(true);
   };
 
   const handleEdit = (driver: Driver) => {
     setEditingDriver(driver);
-    form.setFieldsValue(driver);
+    form.setFieldsValue({
+      ...driver,
+    });
     setModalVisible(true);
+  };
+
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validateFields();
+      const fleet = fleets.find(f => f.id === values.fleetId);
+      
+      if (editingDriver) {
+        updateDriver(editingDriver.id, {
+          ...values,
+          fleetName: fleet?.name,
+        });
+        message.success('司机信息已更新');
+      } else {
+        const newDriver: Driver = {
+          id: `d${Date.now()}`,
+          name: values.name,
+          phone: values.phone,
+          fleetId: values.fleetId,
+          fleetName: fleet?.name,
+          carType: values.carType,
+          carCapacity: Number(values.carCapacity),
+          plateNumber: values.plateNumber,
+          serviceAreas: values.serviceAreas || [],
+          nightService: values.nightService,
+          usualStores: values.usualStores || [],
+          tags: values.tags || [],
+          rating: 5.0,
+          totalOrders: 0,
+          status: values.status,
+        };
+        addDriver(newDriver);
+        message.success('司机添加成功');
+      }
+      setModalVisible(false);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const renderEvaluationPopover = (driver: Driver) => {
@@ -315,7 +360,7 @@ const DriverManagement: React.FC = () => {
         title={editingDriver ? '编辑司机信息' : '新增司机'}
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
-        onOk={() => form.submit()}
+        onOk={handleSubmit}
         width={640}
         okText="保存"
         cancelText="取消"

@@ -65,7 +65,7 @@ const tagColorMap: Record<DriverTag, string> = {
 };
 
 const OrderCenter: React.FC = () => {
-  const { orders, stores, getDriversByFilter, addOrder, updateOrder, getEvaluationsByDriver } = useApp();
+  const { orders, stores, drivers, getDriversByFilter, addOrder, updateOrder, getEvaluationsByDriver, addEvaluation, updateDriver } = useApp();
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>();
   const [publishVisible, setPublishVisible] = useState(false);
@@ -90,7 +90,7 @@ const OrderCenter: React.FC = () => {
 
   const recommendedDrivers = useMemo(() => {
     if (!currentOrder) return [];
-    const isNight = isNightTime(currentOrder.departureTime);
+    const isNight = isNightTime(currentOrder.endTime);
     return getDriversByFilter(currentOrder.storeId, isNight, currentOrder.peopleCount, currentOrder.priorityTags);
   }, [currentOrder, getDriversByFilter]);
 
@@ -151,6 +151,10 @@ const OrderCenter: React.FC = () => {
     feedbackForm.setFieldsValue({
       actualArrivalTime: order.actualArrivalTime ? dayjs(order.actualArrivalTime, 'YYYY-MM-DD HH:mm') : null,
       playerFeedback: order.playerFeedback,
+      punctuality: 5,
+      service: 5,
+      route: 5,
+      tags: [],
     });
     setFeedbackVisible(true);
   };
@@ -158,12 +162,45 @@ const OrderCenter: React.FC = () => {
   const handleFeedbackSubmit = async () => {
     try {
       const values = await feedbackForm.validateFields();
-      if (!currentOrder) return;
+      if (!currentOrder || !currentOrder.driverId || !currentOrder.driverName) {
+        message.error('该订单尚未指派司机，无法评价');
+        return;
+      }
+      
+      const actualArrivalTime = values.actualArrivalTime ? values.actualArrivalTime.format('YYYY-MM-DD HH:mm') : undefined;
+      
       updateOrder(currentOrder.id, {
         status: '已完成',
-        actualArrivalTime: values.actualArrivalTime ? values.actualArrivalTime.format('YYYY-MM-DD HH:mm') : undefined,
+        actualArrivalTime,
         playerFeedback: values.playerFeedback,
       });
+
+      const evaluation = {
+        id: `e${Date.now()}`,
+        driverId: currentOrder.driverId,
+        driverName: currentOrder.driverName,
+        orderId: currentOrder.id,
+        punctuality: values.punctuality,
+        service: values.service,
+        route: values.route,
+        feedback: values.playerFeedback,
+        tags: values.tags || [],
+        createdAt: dayjs().format('YYYY-MM-DD HH:mm'),
+      };
+      addEvaluation(evaluation);
+
+      const driver = drivers.find(d => d.id === currentOrder.driverId);
+      if (driver) {
+        const evals = getEvaluationsByDriver(currentOrder.driverId);
+        const avgRating = evals.length > 0 
+          ? evals.reduce((sum, e) => sum + (e.punctuality + e.service + e.route) / 3, 0) / evals.length
+          : 5;
+        updateDriver(currentOrder.driverId, {
+          rating: Math.round(avgRating * 100) / 100,
+          totalOrders: driver.totalOrders + 1,
+        });
+      }
+
       message.success('反馈已提交，评价数据已沉淀');
       setFeedbackVisible(false);
     } catch (err) {
@@ -246,13 +283,13 @@ const OrderCenter: React.FC = () => {
       key: 'time',
       width: 220,
       render: (_: unknown, record: CarOrder) => {
-        const isNight = isNightTime(record.departureTime);
+        const isNight = isNightTime(record.endTime);
         return (
           <Space orientation="vertical" size={0}>
             <Space>
               <ClockCircleOutlined style={{ color: isNight ? '#eb2f96' : '#1677ff' }} />
               <Text strong>{dayjs(record.departureTime).format('MM-DD HH:mm')}</Text>
-              {isNight && <Tag icon={<MoonOutlined />} color="magenta">夜间</Tag>}
+              {isNight && <Tag icon={<MoonOutlined />} color="magenta">夜间散场</Tag>}
             </Space>
             <Text type="secondary" style={{ fontSize: 12 }}>
               至 {dayjs(record.endTime).format('MM-DD HH:mm')} · {record.routeType}
@@ -656,6 +693,30 @@ const OrderCenter: React.FC = () => {
                   style={{ width: '100%' }}
                   placeholder="选择司机实际到达时间"
                 />
+              </Form.Item>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item name="punctuality" label="准时性" rules={[{ required: true }]}>
+                    <Rate />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item name="service" label="服务态度" rules={[{ required: true }]}>
+                    <Rate />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item name="route" label="路线熟悉度" rules={[{ required: true }]}>
+                    <Rate />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item name="tags" label="服务标签">
+                <Select mode="multiple" placeholder="选择符合的服务标签">
+                  {allPriorityTags.map(t => (
+                    <Option key={t} value={t}>{t}</Option>
+                  ))}
+                </Select>
               </Form.Item>
               <Form.Item
                 name="playerFeedback"

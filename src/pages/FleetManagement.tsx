@@ -1,12 +1,17 @@
-import React from 'react';
-import { Table, Card, Tag, Space, Typography, Button, Avatar, Row, Col } from 'antd';
-import { TeamOutlined, PhoneOutlined, StarOutlined, UserOutlined } from '@ant-design/icons';
+import React, { useState } from 'react';
+import { Table, Card, Tag, Space, Typography, Button, Avatar, Row, Col, Modal, Form, Input, Select, message } from 'antd';
+import { TeamOutlined, PhoneOutlined, StarOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
 import { useApp } from '../context/AppContext';
+import type { Fleet } from '../types';
 
 const { Title, Text } = Typography;
+const { Option } = Select;
 
 const FleetManagement: React.FC = () => {
-  const { fleets, drivers } = useApp();
+  const { fleets, drivers, updateFleet } = useApp();
+  const [editVisible, setEditVisible] = useState(false);
+  const [editingFleet, setEditingFleet] = useState<Fleet | null>(null);
+  const [form] = Form.useForm();
 
   const getLevelColor = (level: string) => {
     const map: Record<string, string> = { 'A级': 'gold', 'B级': 'blue', 'C级': 'green' };
@@ -14,6 +19,25 @@ const FleetManagement: React.FC = () => {
   };
 
   const getDriverCount = (fleetId: string) => drivers.filter(d => d.fleetId === fleetId).length;
+
+  const handleEdit = (fleet: Fleet) => {
+    setEditingFleet(fleet);
+    form.setFieldsValue(fleet);
+    setEditVisible(true);
+  };
+
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validateFields();
+      if (editingFleet) {
+        updateFleet(editingFleet.id, values);
+        message.success('车队信息已更新');
+        setEditVisible(false);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const columns = [
     {
@@ -91,10 +115,13 @@ const FleetManagement: React.FC = () => {
       title: '操作',
       key: 'action',
       width: 180,
-      render: () => (
+      fixed: 'right' as const,
+      render: (_: unknown, record: Fleet) => (
         <Space>
           <Button type="link" size="small">查看详情</Button>
-          <Button type="link" size="small">编辑</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+            编辑
+          </Button>
         </Space>
       ),
     },
@@ -144,6 +171,44 @@ const FleetManagement: React.FC = () => {
           pagination={{ pageSize: 10, showTotal: (total) => `共 ${total} 个车队` }}
         />
       </Card>
+
+      <Modal
+        title="编辑车队信息"
+        open={editVisible}
+        onCancel={() => setEditVisible(false)}
+        onOk={handleSubmit}
+        okText="保存"
+        cancelText="取消"
+        width={520}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item name="name" label="车队名称" rules={[{ required: true, message: '请输入车队名称' }]}>
+            <Input placeholder="请输入车队名称" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="contact" label="联系人" rules={[{ required: true, message: '请输入联系人' }]}>
+                <Input placeholder="请输入联系人姓名" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="phone" label="联系电话" rules={[{ required: true, message: '请输入联系电话' }]}>
+                <Input placeholder="请输入联系电话" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="cooperationLevel" label="合作等级" rules={[{ required: true, message: '请选择合作等级' }]}>
+            <Select placeholder="选择合作等级">
+              <Option value="A级">A级 - 核心合作</Option>
+              <Option value="B级">B级 - 优质合作</Option>
+              <Option value="C级">C级 - 普通合作</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="driverCount" label="注册司机数">
+            <Input type="number" placeholder="车队注册司机总人数" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };
